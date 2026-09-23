@@ -92,6 +92,7 @@ Same core loop: hold-to-talk, hands-free lock, paste into any app, history, dict
 
 - **Nothing happens on the hotkey (Mac):** Accessibility and Input Monitoring must both be on for LocalFlow, then restart it. After updating to a new build you may need to remove and re-add it in both lists.
 - **Text is copied but not pasted:** some elevated (admin) windows on Windows block synthetic keystrokes from normal apps; press `Ctrl`+`V` yourself or run LocalFlow as admin.
+- **Ctrl+Win does nothing (Windows):** a key remapper (AutoHotkey, PowerToys Keyboard Manager) that rewrites the Win key will swallow the chord. Pick another hotkey such as `ctrl+alt` or `alt_r`.
 - **Start menu opens after `Ctrl`+`Win`:** shouldn't happen (LocalFlow masks the Win key), but if it does, pick a different hotkey.
 - **Check the model works:** run `LocalFlow.exe --selftest --out result.json` (or `LocalFlow.app/Contents/MacOS/LocalFlow --selftest`) to transcribe the bundled sample and report timing.
 

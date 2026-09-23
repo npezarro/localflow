@@ -209,7 +209,7 @@ class HotkeyListener:
     # --- suppression of the hands-free lock key -------------------------------------
     def _win_filter(self, msg, data):
         if data.vkCode == self.WIN_SPACE_VK and self.machine.lock_key == "space":
-            if self.machine.wants_suppress("space") and not (data.flags & 0x10):  # 0x10 = injected
+            if self.machine.wants_suppress("space") and (ACCEPT_INJECTED or not data.flags & 0x10):  # 0x10 = injected
                 if msg in (0x0100, 0x0104):  # key down
                     self.machine.press("space")
                 else:
