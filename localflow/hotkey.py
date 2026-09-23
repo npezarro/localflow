@@ -3,9 +3,14 @@
 ``HotkeyMachine`` is a pure state machine (unit tested); ``HotkeyListener``
 feeds it from pynput and handles key suppression for the hands-free lock key.
 """
+import os
 import sys
 import threading
 import time
+
+# Test hook: accept synthetic key events (normally ignored so our own paste can't trigger us).
+ACCEPT_INJECTED = os.environ.get("LOCALFLOW_ACCEPT_INJECTED") == "1"
+MASK_KEY = "vk232"  # the key we tap to stop Win from opening Start; never part of a chord
 
 IDLE, HOLDING, LOCKED, BLOCKED = "idle", "holding", "locked", "blocked"
 
@@ -225,10 +230,10 @@ class HotkeyListener:
 
     # --- normal dispatch -------------------------------------------------------------
     def _on_press(self, key, injected=False):
-        if injected:
+        if injected and not ACCEPT_INJECTED:
             return
         name = key_name(key)
-        if not name:
+        if not name or name == MASK_KEY:
             return
         if self._capture:
             self._capture[1].add(name)
@@ -241,10 +246,10 @@ class HotkeyListener:
                 callback()
 
     def _on_release(self, key, injected=False):
-        if injected:
+        if injected and not ACCEPT_INJECTED:
             return
         name = key_name(key)
-        if not name:
+        if not name or name == MASK_KEY:
             return
         if self._capture:
             callback, seen, down = self._capture

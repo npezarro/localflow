@@ -66,11 +66,16 @@ jobs:
           if (-not (Test-Path unzipped/LocalFlow/data)) { Write-Error "data dir not created next to exe"; exit 1 }
       - name: Selftest the packaged app (macOS)
         if: runner.os == 'macOS'
+        timeout-minutes: 8
         run: |
           ditto -x -k "${{ matrix.artifact }}.zip" unzipped
           unzipped/LocalFlow/LocalFlow.app/Contents/MacOS/LocalFlow --selftest --out "$PWD/selftest.json"
           cat selftest.json
           test -d unzipped/LocalFlow/data
+      - name: Show app log
+        if: always()
+        shell: bash
+        run: cat unzipped/LocalFlow/data/localflow.log || true
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

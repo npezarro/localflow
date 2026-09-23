@@ -11,7 +11,20 @@ from . import __version__, audio, config, paths, textproc
 from .transcriber import Transcriber, resolve_model
 
 
+def _step(msg):
+    import logging
+
+    logging.getLogger("localflow.selftest").info(msg)
+    if sys.stderr:
+        sys.stderr.write("[selftest] %s\n" % msg)
+        sys.stderr.flush()
+
+
 def run(argv):
+    import faulthandler
+
+    if sys.stderr:
+        faulthandler.dump_traceback_later(300, exit=True)  # CI: show where a hang is, then fail
     wav = None
     out = None
     model = None
@@ -33,14 +46,17 @@ def run(argv):
               "python": sys.version.split()[0], "model": model,
               "model_source": resolve_model(model)[0], "data_dir": paths.data_dir(), "ok": False}
     try:
+        _step("loading model")
         t = Transcriber()
         result["load_s"] = round(t.load(model), 2)
+        _step("transcribing")
         samples = audio.load_wav(wav)
         t0 = time.time()
         raw = t.transcribe(samples, cfg["language"], ["Kennedy"], cfg["beam_size"])
         result["transcribe_s"] = round(time.time() - t0, 2)
         result["audio_s"] = round(len(samples) / audio.SAMPLE_RATE, 2)
         result["text"] = textproc.clean(raw, cfg)
+        _step("clipboard")
         try:
             from . import output
 
@@ -48,6 +64,7 @@ def run(argv):
             result["clipboard_roundtrip"] = output.get_clipboard() == result["text"]
         except Exception as exc:  # headless Linux CI has no clipboard
             result["clipboard_roundtrip"] = "unavailable: %s" % exc
+        _step("pynput")
         try:
             import pynput.keyboard  # noqa: F401  (import check for the bundled backend)
 
