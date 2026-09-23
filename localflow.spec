@@ -1,5 +1,8 @@
 # PyInstaller spec: one-folder build (portable: unzip and run).
+import os
 import sys
+
+sys.path.insert(0, SPECPATH)  # noqa: F821 (injected by PyInstaller)
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
