@@ -165,7 +165,7 @@ def test_release_tail_keeps_recording_after_release():
     import threading as th
     import time as tm
 
-    rec = audio.Recorder(warm=True, preroll=0.0, tail=0.6)
+    rec = audio.Recorder(warm=True, preroll=0.0, tail=1.5)
     rec._rate = 16000
     rec._fake = None
     rec._stream = type("S", (), {"active": True})()
@@ -176,14 +176,14 @@ def test_release_tail_keeps_recording_after_release():
 
     def speak_after_release():  # the mic keeps delivering audio after the key comes up
         for _ in range(12):
-            tm.sleep(0.03)
+            tm.sleep(0.01)
             rec._callback(block, 480, None, None)
 
     t = th.Thread(target=speak_after_release)
     t.start()
     out = rec.stop()
     t.join()
-    assert len(out) / 16000 >= 0.6  # held audio plus what arrived during the tail
+    assert len(out) == 22 * 480  # all 10 held blocks plus all 12 that arrived during the tail
 
 
 def test_classify_cli_failures():
