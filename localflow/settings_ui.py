@@ -145,6 +145,19 @@ class SettingsPanel:
                    command=lambda: self.app.capture_hotkey(self.vars["paste_last_hotkey"])).pack(
             side="left", padx=4)
         self._row(s, "Paste last transcript", f)
+        ttk.Checkbutton(s, text="Live typing: type words into the focused app while you speak",
+                        variable=self._var("live_typing", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
+        s._row += 1
+        ttk.Label(s, foreground=MUTED, wraplength=520, justify="left",
+                  text="Words appear about 1-2 s behind your voice and are typed as keystrokes (the "
+                       "clipboard is left alone). Uses the local model; AI clean-up doesn't apply, "
+                       "because typed text isn't rewritten afterwards.").grid(row=s._row, column=1, sticky="w")
+        s._row += 1
+        f = ttk.Frame(s)
+        ttk.Entry(f, textvariable=self._var("live_hotkey"), width=22).pack(side="left", fill="x", expand=True)
+        ttk.Button(f, text="Record…", command=lambda: self.app.capture_hotkey(self.vars["live_hotkey"])).pack(
+            side="left", padx=4)
+        self._row(s, "Toggle live typing", f)
         self._row(s, "Keep listening after release",
                   ttk.Spinbox(s, from_=0.0, to=3.0, increment=0.1, width=6, format="%.1f",
                               textvariable=self._var("release_tail")),
@@ -251,6 +264,14 @@ class SettingsPanel:
         self.dirty_var.set("● Unsaved changes")
         self.dirty_label.configure(foreground="#c77700")
 
+    def set_quietly(self, key, value):
+        """Reflect a change made outside the form without marking it unsaved."""
+        self._loading = True
+        try:
+            self.vars[key].set(value)
+        finally:
+            self._loading = False
+
     def _clean(self, message="All changes saved"):
         self.dirty = False
         self.dirty_var.set(message)
@@ -287,7 +308,7 @@ class SettingsPanel:
     def collect(self):
         """Form -> new config dict. Raises ValueError with a user-facing message."""
         new = dict(self.app.cfg)
-        for key in ("hotkey", "paste_last_hotkey"):
+        for key in ("hotkey", "paste_last_hotkey", "live_hotkey"):
             value = self.vars[key].get().strip().lower()
             try:
                 hotkey.parse_combo(value)
@@ -295,7 +316,7 @@ class SettingsPanel:
                 raise ValueError("The %s can't be empty." % key.replace("_", " "))
             new[key] = value
         for key, var in self.vars.items():
-            if key in ("hotkey", "paste_last_hotkey"):
+            if key in ("hotkey", "paste_last_hotkey", "live_hotkey"):
                 continue
             if key == "engine":
                 new[key] = _key_for(ENGINES, var.get())

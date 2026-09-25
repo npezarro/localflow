@@ -19,3 +19,9 @@
 - Adjustable "Keep listening after release" (release_tail, 0-3 s) and "Keep before press" (preroll, 0-2 s).
 - Verified on this PC via tests/setup_smoke.py (real app): first-launch open, Claude detection picked WSL Ubuntu over signed-out native + npm installs, bad Groq key rejected, 2 failures pause + assistant on next show, tail/preroll saved and applied to the live recorder, invalid number rejected, zero keychain writes.
 - Confirmed no credentials in release zips (scan with positive control) and none in CI (no secrets configured).
+
+## 2026-09-24 v0.4.0
+- Live typing (toggle: Settings checkbox, tray item, Alt+Shift+L): LocalAgreement-2 streaming over faster-whisper word timestamps (localflow/live.py), Unicode SendInput / CGEvent typing with held-modifier lift on Windows (localflow/typer.py), LIVE badge on the pill.
+- Fixes found while benchmarking: prompt must only contain text whose audio left the buffer (else Whisper skips words and timestamps shift); filter seam on word END + n-gram dedupe; temperature 0 + max_new_tokens cap for live passes (hallucination loops on cut-off words).
+- Verified: 4 clips word-complete vs one-shot, 75-93% typed before stop; Windows E2E with Ctrl+Alt physically held (fake mic): progressive text from t=4s, final exact, no shortcut misfires, focus kept; toggle flips + saves; tests 31 pass (+1 Windows-only).
+- Not verified: Mac live typing (CGEvent flags path) on real hardware; Chromium/Electron text fields.

@@ -9,9 +9,10 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-from . import __version__, audio, config, hotkey, keystore, output, paths, pipeline, platform_fix, polish
+from . import __version__, audio, config, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
 from .history import History
 from .indicator import Indicator
+from .live import LiveSession
 from .settings_ui import SettingsPanel
 from .setup_ui import SetupDialog
 from .transcriber import Transcriber, is_local
@@ -38,6 +39,8 @@ class App:
         self.ui_q = queue.Queue()
         self.ctl_q = queue.Queue()
         self.work_q = queue.Queue()
+        self.live_q = queue.Queue()
+        self.live_active = False
         self.record_started = 0.0
         self.polish_failures = 0
         self.polish_paused = False
@@ -58,6 +61,7 @@ class App:
 
         threading.Thread(target=self._control_loop, daemon=True, name="control").start()
         threading.Thread(target=self._work_loop, daemon=True, name="transcribe").start()
+        threading.Thread(target=self._live_loop, daemon=True, name="live").start()
         self.load_model(self.cfg["model"])
         self.listener = None
         self.start_listener()
@@ -171,6 +175,8 @@ class App:
         menu = pystray.Menu(
             pystray.MenuItem("Show LocalFlow", lambda: self.ui_q.put(("show",)), default=True),
             pystray.MenuItem("Paste last transcript", lambda: self.ctl_q.put(("paste_last",))),
+            pystray.MenuItem("Live typing", lambda: self.ui_q.put(("toggle_live",)),
+                             checked=lambda _item: bool(self.cfg["live_typing"])),
             pystray.MenuItem("Set up AI clean-up…", lambda: self.ui_q.put(("setup",))),
             pystray.MenuItem("Quit", lambda: self.ui_q.put(("quit",))))
         self.tray = pystray.Icon("LocalFlow", img, "LocalFlow", menu)
@@ -213,9 +219,12 @@ class App:
         else:
             text = "Press %s to start dictating, press it again to paste. Esc cancels." % hk
         text += "  Paste last: %s." % hotkey.format_combo(self.cfg["paste_last_hotkey"])
+        text += "  Live typing is %s (%s toggles)." % ("ON" if self.cfg["live_typing"] else "off",
+                                                      hotkey.format_combo(self.cfg["live_hotkey"]))
         self.hint_var.set(text)
 
     def show_overlay(self, mode, text=""):
+        self.indicator.live = bool(self.cfg["live_typing"])
         kind = {"rec": "listening", "locked": "locked", "message": "message"}.get(mode)
         if kind is None:
             kind = "polish" if text.startswith("Cleaning") else "busy"
@@ -236,6 +245,10 @@ class App:
             on_cancel=lambda: self.ctl_q.put(("cancel",)),
             on_lock=lambda: self.ui_q.put(("locked",)))
         oneshots = {}
+        try:
+            oneshots[hotkey.parse_combo(self.cfg["live_hotkey"])] = lambda: self.ui_q.put(("toggle_live",))
+        except ValueError:
+            pass
         try:
             oneshots[hotkey.parse_combo(self.cfg["paste_last_hotkey"])] = \
                 lambda: self.ctl_q.put(("paste_last",))
@@ -264,6 +277,9 @@ class App:
                         platform_fix.mask_windows_key()
                     self.recorder.start()
                     self.record_started = time.monotonic()
+                    if self.cfg["live_typing"]:
+                        self.live_active = True
+                        self.live_q.put(("begin",))
                     if self.cfg["sounds"]:
                         audio.play(audio.tone(880))
                     self.ui_q.put(("recording",))
@@ -272,6 +288,11 @@ class App:
                     seconds = time.monotonic() - self.record_started
                     if self.cfg["sounds"]:
                         audio.play(audio.tone(660))
+                    if self.live_active:
+                        self.live_active = False
+                        self.ui_q.put(("transcribing",))
+                        self.live_q.put(("finish", samples, seconds))
+                        continue
                     if len(samples) < audio.SAMPLE_RATE * 0.25:
                         self.ui_q.put(("idle",))
                         continue
@@ -279,6 +300,9 @@ class App:
                     self.work_q.put((samples, seconds))
                 elif cmd == "cancel":
                     self.recorder.stop(keep_tail=False)
+                    if self.live_active:
+                        self.live_active = False
+                        self.live_q.put(("cancel",))
                     self.ui_q.put(("idle",))
                 elif cmd == "paste_last":
                     last = self.history.last()
@@ -330,6 +354,59 @@ class App:
             except Exception as exc:
                 log.exception("transcription failed")
                 self.ui_q.put(("error", "Transcription failed: %s" % exc))
+
+    def _live_loop(self):
+        """Live typing: while recording, commit and type words about once a second."""
+        while True:
+            if self.live_q.get()[0] != "begin":
+                continue
+            cfg = dict(self.cfg)
+            session = LiveSession(lambda a, lang, prompt: self.transcriber.transcribe_words(a, lang, prompt), cfg)
+            last_pass = time.monotonic()
+            try:
+                while True:
+                    try:
+                        msg = self.live_q.get(timeout=0.2)
+                    except queue.Empty:
+                        msg = None
+                    if msg and msg[0] == "cancel":
+                        break  # words already typed stay; the rest is discarded
+                    if msg and msg[0] == "finish":
+                        self._live_finish(session, msg[1], msg[2])
+                        break
+                    if time.monotonic() - last_pass < 0.8 or not self.transcriber.ready.is_set():
+                        continue
+                    last_pass = time.monotonic()
+                    piece = session.update(self.recorder.peek())
+                    if piece:
+                        typer.type_text(piece, held=tuple(self.listener.machine.pressed) if self.listener else ())
+            except Exception as exc:
+                log.exception("live typing failed")
+                self.ui_q.put(("error", "Live typing failed: %s" % exc))
+
+    def _live_finish(self, session, samples, seconds):
+        if not self.transcriber.ready.wait(timeout=600):
+            raise RuntimeError("model is still loading")
+        if self.cfg["save_last_recording"]:
+            audio.save_wav(os.path.join(paths.data_dir(), "last-recording.wav"), samples)
+        rest = session.finish(samples)
+        self._wait_for_keys_up(timeout=1.0)
+        typer.type_text(rest, held=tuple(self.listener.machine.pressed) if self.listener else ())
+        text = session.typed
+        log.info("live dictation: audio %.1fs | %d chars typed", seconds, len(text))
+        if not text.strip():
+            self.ui_q.put(("error", "Didn't catch any words."))
+            return
+        item = self.history.add(text, seconds, "live:%s" % self.transcriber.model_name)
+        self.ui_q.put(("transcript", item))
+
+    def toggle_live(self):
+        new = dict(self.cfg, live_typing=not self.cfg["live_typing"])
+        self.apply_settings(new)
+        self.settings.set_quietly("live_typing", self.cfg["live_typing"])  # keep other unsaved edits
+        state = "on" if self.cfg["live_typing"] else "off"
+        self.set_status("Live typing %s" % state)
+        self.show_overlay("message", "Live typing %s" % state)
 
     def load_model(self, name):
         self.transcriber.ready.clear()
@@ -399,6 +476,8 @@ class App:
             self.show_window()
         elif kind == "setup":
             self.open_setup()
+        elif kind == "toggle_live":
+            self.toggle_live()
         elif kind == "quit":
             self.quit()
 

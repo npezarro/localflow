@@ -29,6 +29,7 @@ class Indicator:
         self._alpha = 0.0
         self._hide_at = None
         self.width = 132
+        self.live = False
 
         win = self.win = tk.Toplevel(root)
         win.overrideredirect(True)
@@ -90,8 +91,11 @@ class Indicator:
             pass
 
     def _width_for(self, mode, text):
+        extra = 38 if self.live and mode in ("listening", "locked") else 0
         if mode == "locked":
-            return 196
+            return 196 + extra
+        if mode == "listening":
+            return 132 + extra
         if mode == "message":
             return min(520, 40 + 7 * len(text))
         return 132
@@ -127,7 +131,12 @@ class Indicator:
             c.create_text(width - 14, mid, text="hands-free", anchor="e", fill=DIM,
                           font=("TkDefaultFont", 8))
             left = 30
-        span = (width - left - (84 if self.mode == "locked" else 20))
+        right = 84 if self.mode == "locked" else 20
+        if self.live and self.mode in ("listening", "locked"):
+            right += 38
+            c.create_text(width - (84 if self.mode == "locked" else 16), mid, text="LIVE", anchor="e",
+                          fill=ACCENT, font=("TkDefaultFont", 8, "bold"))
+        span = (width - left - right)
         step = span / N_BARS
         t = time.monotonic()
         for i in range(N_BARS):

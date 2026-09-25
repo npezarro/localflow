@@ -13,6 +13,9 @@ DEFAULTS = {
     "mode": "hold",
     "lock_key": "space",
     "paste_last_hotkey": "alt+shift+z",
+    # Live typing: words are typed into the focused app while you speak
+    "live_typing": False,
+    "live_hotkey": "alt+shift+l",  # toggles live typing on/off
     # Transcription engine: "local" (Whisper on this machine) or "cloud" (OpenAI-compatible API)
     "engine": "local",
     "model": "base.en",

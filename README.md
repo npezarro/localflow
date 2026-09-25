@@ -40,6 +40,15 @@ Open `LocalFlow.app`. macOS will ask for three permissions; grant each, then qui
 | Hands-free | while holding, tap `Space`; press the hotkey again to finish | same |
 | Cancel | `Esc` | `Esc` |
 | Paste last transcript again | `Alt` + `Shift` + `Z` | `Option` + `Shift` + `Z` |
+| Turn live typing on/off | `Alt` + `Shift` + `L` | `Option` + `Shift` + `L` |
+
+### Live typing
+
+With live typing on, words appear in whatever text field you're using while you're still talking, instead of all at once when you let go. Turn it on with the checkbox in *Settings → Dictation*, the tray menu, or `Alt`+`Shift`+`L`; the pill shows a **LIVE** badge while it's on.
+
+How it works: about once a second LocalFlow re-transcribes the part of the recording that isn't final yet and types only the words two passes in a row agree on, so what's typed never has to be deleted and rewritten. Text runs roughly one to two seconds behind your voice, and the last few words are typed when you stop. Words go in as keystrokes, so your clipboard isn't touched; if you're holding the hotkey, LocalFlow briefly releases it for each burst so held Ctrl/Alt/Win don't turn letters into shortcuts.
+
+Trade-offs: live typing uses the local model (so it works offline, but not with the online engine) and AI clean-up doesn't apply, because text that's already typed isn't rewritten. `Esc` stops a live dictation but leaves the words already typed.
 
 A floating pill appears at the bottom centre of the monitor you're working on (the one with the focused window) while you dictate: a live waveform that follows your voice, a red dot in hands-free mode, then a travelling wave while it transcribes (blue while AI clean-up runs). It never takes focus, so the text still lands in your app. Taps shorter than 0.3 s are ignored, and if you press a different key while holding the hotkey (for example `Ctrl`+`Win`+`D`), LocalFlow backs off so your normal shortcuts still work.
 

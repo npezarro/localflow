@@ -184,6 +184,7 @@ class Recorder:
     def start(self):
         if self._fake:
             self._recording = True
+            self._fake_started = time.monotonic()
             return
         self._ensure_stream()
         with self._lock:
@@ -204,6 +205,17 @@ class Recorder:
         if not self.warm:
             self.close()
             self.level = 0.0
+        if not chunks:
+            return np.zeros(0, dtype=np.float32)
+        return resample(np.concatenate(chunks), self._rate)
+
+    def peek(self):
+        """The recording so far (16 kHz), without stopping it. Used by live typing."""
+        if self._fake:
+            full = load_wav(self._fake)
+            return full[:int((time.monotonic() - self._fake_started) * SAMPLE_RATE)]
+        with self._lock:
+            chunks = list(self._chunks)
         if not chunks:
             return np.zeros(0, dtype=np.float32)
         return resample(np.concatenate(chunks), self._rate)

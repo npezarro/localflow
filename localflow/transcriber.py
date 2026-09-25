@@ -82,3 +82,36 @@ class Transcriber:
                 text = " ".join(s.text.strip() for s in segments
                                 if s.no_speech_prob < 0.6).strip()
             return text
+
+    def transcribe_words(self, audio, language="en", prompt=None, beam_size=1):
+        """Word-level hypothesis for live typing: [(start_s, end_s, text_with_leading_space)]."""
+        with self._lock:
+            model = self.model
+            if model is None:
+                raise RuntimeError("model not loaded")
+            segments, _info = model.transcribe(
+                audio,
+                language=None if language in (None, "", "auto") else language,
+                beam_size=beam_size,
+                condition_on_previous_text=False,
+                initial_prompt=prompt,
+                word_timestamps=True,
+                temperature=0.0,  # one decoding pass; fallback retries made live passes take seconds
+                # Speech runs ~3 tokens/s; a loop on a cut-off word ("All right. All right…")
+                # otherwise decodes until the 448-token limit and stalls the live text.
+                max_new_tokens=min(440, int(len(audio) / 16000 * 6) + 16),
+                vad_filter=True,
+                vad_parameters={"threshold": 0.35, "min_silence_duration_ms": 1000, "speech_pad_ms": 400},
+            )
+            words = []
+            last = None
+            for seg in segments:  # decoded lazily: breaking out skips the remaining work
+                text = seg.text.strip().lower()
+                if text and text == last:
+                    break  # "All right. All right. …": a hallucination loop on a cut-off word
+                last = text
+                if seg.no_speech_prob > 0.6:
+                    continue
+                for w in seg.words or []:
+                    words.append((float(w.start), float(w.end), w.word))
+            return words
