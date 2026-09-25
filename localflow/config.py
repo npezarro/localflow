@@ -19,6 +19,7 @@ DEFAULTS = {
     # Continuous live mode: this hotkey starts/pauses always-on listening that types as you talk
     "live_pause_hotkey": "ctrl+shift+space",
     "live_auto_pause_min": 5,  # pause continuous mode after this many minutes of silence (0 = never)
+    "live_autostart": False,  # start always-on live listening when LocalFlow opens
     # Which apps LocalFlow may type/paste into: "all", "only" (app_list) or "except" (app_list)
     "type_into": "all",
     "app_list": [],

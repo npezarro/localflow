@@ -170,6 +170,9 @@ class SettingsPanel:
         self._row(s, "Always-on live listening", f,
                   "Press to start listening; words keep flowing into whatever field is focused "
                   "(even as you switch apps) until you press it again to pause. No need to hold anything.")
+        ttk.Checkbutton(s, text="Start always-on listening when LocalFlow opens (the hotkey then pauses / resumes it)",
+                        variable=self._var("live_autostart", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
+        s._row += 1
         self._row(s, "Auto-pause after silence",
                   ttk.Spinbox(s, from_=0, to=120, increment=1, width=6, textvariable=self._var("live_auto_pause_min")),
                   "Minutes of silence before always-on listening pauses itself (0 = never).")

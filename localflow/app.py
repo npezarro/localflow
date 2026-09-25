@@ -72,6 +72,8 @@ class App:
         self._open_mic()
         self.root.after(40, self._poll)
         self.root.after(1200, self._maybe_setup)
+        if self.cfg["live_autostart"]:
+            self.root.after(1500, lambda: self.ctl_q.put(("continuous",)))
         if IS_MAC and not platform_fix.macos_accessibility_trusted(prompt=True):
             self.set_status("Grant Accessibility + Input Monitoring in System Settings, then restart",
                             warn=True)

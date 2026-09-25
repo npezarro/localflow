@@ -36,3 +36,6 @@
 - One-shot hotkeys now swallow their final key (Windows hook filter, macOS intercept); LocalFlow's own SendInput events are tagged (dwExtraInfo) and ignored by its listener.
 - Benchmarks (base.en, 16 randomized pass timings over 2 recordings): no lost or duplicated words; remaining error is an occasional "ask"->"asked" substitution on partial audio. Windows E2E: start hotkey typed nothing, word-perfect session, pause/resume, auto-pause, allow-list blocks typing, settings save/validation.
 - Not verified: Mac continuous mode / CGEvent intercept on hardware; very long (>10 min) real-mic sessions.
+
+## 2026-09-25 v0.6.1
+- live_autostart: always-on listening starts at launch; hotkey pauses/resumes. Verified on Windows (real app, typing blocked by allow-list during test): listening 4 s after launch, pause saved history, resume works.
