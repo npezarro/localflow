@@ -255,6 +255,23 @@ class SettingsPanel:
         self.repl_text = self._text(s, 3)
         self._row(s, "Replacements", self.repl_text,
                   "One per line, spoken => written. e.g. new line => \\n")
+        ttk.Checkbutton(s, text="Learn from my dictations and corrections (stays on this computer)",
+                        variable=self._var("learn", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
+        s._row += 1
+        f = ttk.Frame(s)
+        self.learned_list = tk.Listbox(f, height=5, activestyle="none")
+        self.learned_list.pack(side="left", fill="both", expand=True)
+        lsb = ttk.Scrollbar(f, orient="vertical", command=self.learned_list.yview)
+        lsb.pack(side="left", fill="y")
+        self.learned_list.configure(yscrollcommand=lsb.set)
+        self._row(s, "Learned", f,
+                  "Names and jargon you repeat (after 3 dictations) and fixes from Transcripts → "
+                  "Save correction. They're used as spelling hints and replacements.")
+        f = ttk.Frame(s)
+        ttk.Button(f, text="Forget selected", command=self.forget_learned).pack(side="left")
+        ttk.Button(f, text="Forget all", command=self.forget_all_learned).pack(side="left", padx=6)
+        self._row(s, "", f)
+        self._learned_rows = []
 
     # ------------------------------------------------------------------ state
     def _changed(self):
@@ -263,6 +280,26 @@ class SettingsPanel:
         self.dirty = True
         self.dirty_var.set("● Unsaved changes")
         self.dirty_label.configure(foreground="#c77700")
+
+    def refresh_learned(self):
+        self._learned_rows = self.app.learner.entries()
+        self.learned_list.delete(0, "end")
+        for _kind, _key, label in self._learned_rows:
+            self.learned_list.insert("end", label)
+        if not self._learned_rows:
+            self.learned_list.insert("end", "Nothing learned yet.")
+
+    def forget_learned(self):
+        sel = self.learned_list.curselection()
+        if sel and sel[0] < len(self._learned_rows):
+            kind, key, _label = self._learned_rows[sel[0]]
+            self.app.learner.remove(kind, key)
+            self.refresh_learned()
+
+    def forget_all_learned(self):
+        if messagebox.askyesno("LocalFlow", "Forget everything LocalFlow has learned?"):
+            self.app.learner.clear()
+            self.refresh_learned()
 
     def set_quietly(self, key, value):
         """Reflect a change made outside the form without marking it unsaved."""
@@ -303,6 +340,7 @@ class SettingsPanel:
                 widget.edit_modified(False)
         finally:
             self._loading = False
+        self.refresh_learned()
         self._clean()
 
     def collect(self):

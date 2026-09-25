@@ -1,0 +1,150 @@
+"""Learns how *you* talk, on this computer only (data/learned.json).
+
+Two sources:
+- Corrections: when you fix a transcript in the Transcripts tab, the word-level diff
+  becomes a replacement ("kabir nets" -> "Kubernetes") and the corrected words
+  become vocabulary hints. These apply from the next dictation.
+- Repetition: uncommon words you keep saying (names, jargon) are counted per
+  dictation; after ``PROMOTE_AT`` dictations they become vocabulary hints.
+  "Uncommon" = Whisper's tokenizer needs more than one token for it, which is
+  exactly the set of words Whisper tends to misspell.
+Everything can be reviewed, removed, or switched off in Settings.
+"""
+import difflib
+import json
+import os
+import re
+import threading
+import time
+
+from . import paths
+
+PROMOTE_AT = 3
+MAX_VOCAB_HINTS = 40
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'’\-]{2,}")
+_STOP = {"the", "and", "you", "that", "with", "this", "have", "from", "they", "what", "there"}
+
+
+def _clean_phrase(words):
+    return " ".join(w.strip(".,!?;:\"()[]") for w in words).strip()
+
+
+class Learner:
+    def __init__(self):
+        self.path = os.path.join(paths.data_dir(), "learned.json")
+        self._lock = threading.Lock()
+        self.data = {"terms": {}, "replacements": {}}
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                self.data.update({k: loaded.get(k, {}) for k in ("terms", "replacements")})
+        except (OSError, ValueError):
+            pass
+
+    def _save(self):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, indent=1, ensure_ascii=False)
+        os.replace(tmp, self.path)
+
+    # ------------------------------------------------------------------ learning
+    def observe(self, text, is_uncommon):
+        """Count uncommon words once per dictation. Returns newly promoted terms."""
+        seen = {}
+        for match in _WORD.finditer(text):
+            word = match.group(0).strip("'’-")
+            if len(word) < 3 or word.lower() in _STOP:
+                continue
+            seen.setdefault(word.lower(), word)
+        promoted = []
+        with self._lock:
+            for key, word in seen.items():
+                if not is_uncommon(word):
+                    continue
+                entry = self.data["terms"].setdefault(key, {"term": word, "count": 0, "source": "heard",
+                                                            "enabled": True})
+                entry["count"] += 1
+                entry["last"] = time.time()
+                if word[:1].isupper():
+                    entry["term"] = word  # prefer the capitalised spelling of names
+                if entry["count"] == PROMOTE_AT:
+                    promoted.append(entry["term"])
+            self._save()
+        return promoted
+
+    def learn_correction(self, original, corrected, is_uncommon=lambda w: True):
+        """Diff the transcript you fixed against what was typed. Returns [(wrong, right)]."""
+        a, b = original.split(), corrected.split()
+        norm = lambda ws: [w.lower().strip(".,!?;:\"()[]") for w in ws]  # noqa: E731
+        learned = []
+        with self._lock:
+            for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=norm(a), b=norm(b), autojunk=False).get_opcodes():
+                if op != "replace" or i2 - i1 > 4 or j2 - j1 > 4:
+                    continue
+                wrong, right = _clean_phrase(a[i1:i2]), _clean_phrase(b[j1:j2])
+                if not wrong or not right or wrong.lower() == right.lower():
+                    continue
+                rep = self.data["replacements"].setdefault(wrong.lower(), {"to": right, "count": 0,
+                                                                           "enabled": True})
+                rep.update(to=right, enabled=True)
+                rep["count"] += 1
+                learned.append((wrong, right))
+                for word in right.split():
+                    if len(word) >= 3 and is_uncommon(word):
+                        term = self.data["terms"].setdefault(word.lower(), {"term": word, "count": 0})
+                        term.update(term=word, source="correction", enabled=True)
+                        term["count"] = max(term["count"], PROMOTE_AT)
+            self._save()
+        return learned
+
+    # ------------------------------------------------------------------ applying
+    def vocabulary(self, limit=MAX_VOCAB_HINTS):
+        terms = [t for t in self.data["terms"].values()
+                 if t.get("enabled", True) and (t.get("source") == "correction" or t["count"] >= PROMOTE_AT)]
+        terms.sort(key=lambda t: (t.get("source") != "correction", -t["count"]))
+        return [t["term"] for t in terms[:limit]]
+
+    def replacements(self):
+        return {wrong: r["to"] for wrong, r in self.data["replacements"].items() if r.get("enabled", True)}
+
+    def apply_to(self, cfg):
+        """cfg with learned vocabulary/replacements merged in (your own entries win)."""
+        merged = dict(cfg)
+        vocab = list(cfg.get("vocabulary") or [])
+        lower = {v.lower() for v in vocab}
+        vocab += [t for t in self.vocabulary() if t.lower() not in lower]
+        merged["vocabulary"] = vocab[:MAX_VOCAB_HINTS + len(cfg.get("vocabulary") or [])]
+        reps = self.replacements()
+        reps.update(cfg.get("replacements") or {})
+        merged["replacements"] = reps
+        return merged
+
+    # ------------------------------------------------------------------ review
+    def entries(self):
+        """Rows for the Settings list: (kind, key, label)."""
+        rows = []
+        for wrong, r in sorted(self.data["replacements"].items(), key=lambda kv: -kv[1]["count"]):
+            if r.get("enabled", True):
+                rows.append(("replacement", wrong, "“%s” → “%s”  (your correction)" % (wrong, r["to"])))
+        for key, t in sorted(self.data["terms"].items(), key=lambda kv: -kv[1]["count"]):
+            if not t.get("enabled", True):
+                continue
+            if t.get("source") == "correction":
+                rows.append(("term", key, "%s  (from your correction)" % t["term"]))
+            elif t["count"] >= PROMOTE_AT:
+                rows.append(("term", key, "%s  (heard in %d dictations)" % (t["term"], t["count"])))
+        return rows
+
+    def remove(self, kind, key):
+        """Forget an entry and keep it from being re-learned by repetition."""
+        with self._lock:
+            table = self.data["replacements" if kind == "replacement" else "terms"]
+            if key in table:
+                table[key]["enabled"] = False
+                self._save()
+
+    def clear(self):
+        with self._lock:
+            self.data = {"terms": {}, "replacements": {}}
+            self._save()

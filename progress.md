@@ -25,3 +25,7 @@
 - Fixes found while benchmarking: prompt must only contain text whose audio left the buffer (else Whisper skips words and timestamps shift); filter seam on word END + n-gram dedupe; temperature 0 + max_new_tokens cap for live passes (hallucination loops on cut-off words).
 - Verified: 4 clips word-complete vs one-shot, 75-93% typed before stop; Windows E2E with Ctrl+Alt physically held (fake mic): progressive text from t=4s, final exact, no shortcut misfires, focus kept; toggle flips + saves; tests 31 pass (+1 Windows-only).
 - Not verified: Mac live typing (CGEvent flags path) on real hardware; Chromium/Electron text fields.
+
+## 2026-09-24 v0.5.0
+- Learning (localflow/learn.py, data/learned.json): corrections in Transcripts -> word-diff replacements + vocabulary; uncommon words (multi-token in Whisper's tokenizer) promoted after 3 dictations; merged into each dictation via App._run_cfg (user entries win); Settings list with forget/forget-all/off switch.
+- Verified: real model, one correction turns "Kabir nets" into "Kubernetes" on the next pass, and the vocabulary hint alone still fixes it; Windows real-app UI run (edit -> Save correction -> learned list -> forget); tests 35 pass (+1 Windows-only).

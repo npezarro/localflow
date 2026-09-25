@@ -50,6 +50,15 @@ class History:
                     f.write(json.dumps(item, ensure_ascii=False) + "\n")
         return item
 
+    def update(self, item_id, **fields):
+        with self._lock:
+            for item in self.items:
+                if item["id"] == item_id:
+                    item.update(fields)
+                    self._write()
+                    return item
+        return None
+
     def delete(self, item_id):
         with self._lock:
             self.items = [i for i in self.items if i["id"] != item_id]

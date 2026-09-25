@@ -52,7 +52,16 @@ Trade-offs: live typing uses the local model (so it works offline, but not with 
 
 A floating pill appears at the bottom centre of the monitor you're working on (the one with the focused window) while you dictate: a live waveform that follows your voice, a red dot in hands-free mode, then a travelling wave while it transcribes (blue while AI clean-up runs). It never takes focus, so the text still lands in your app. Taps shorter than 0.3 s are ignored, and if you press a different key while holding the hotkey (for example `Ctrl`+`Win`+`D`), LocalFlow backs off so your normal shortcuts still work.
 
-**Transcripts tab:** every dictation, newest first. Search, double-click to copy, delete, or clear.
+**Transcripts tab:** every dictation, newest first. Search, double-click to copy, delete, or clear. Select one to see it below the list; fix any mistakes there and press **Save correction** (the fixed text is also copied to the clipboard).
+
+### Learning your words
+
+LocalFlow learns how you talk, on your computer only (`data/learned.json`), from two sources:
+
+- **Your corrections.** When you fix a transcript and press *Save correction*, it compares the two and learns what it misheard ("Kabir nets" → "Kubernetes"): the pair becomes a replacement and the corrected word a spelling hint, from the very next dictation. The hint alone is usually enough for Whisper to spell the word right in new sentences too.
+- **Words you repeat.** Uncommon words (names, jargon, product terms: anything Whisper's tokenizer splits into several pieces) are counted per dictation; once one has come up in 3 dictations it's fed to Whisper as a spelling hint automatically.
+
+*Settings → Words → Learned* lists everything it has picked up, with *Forget selected* / *Forget all*, and a checkbox to turn learning off. Your own Vocabulary and Replacements always win over learned ones. It learns from transcripts, not from edits you make afterwards in other apps.
 
 **Settings tab:** changes take effect when you press **Save** (bottom of the tab, always visible). Leaving the tab or closing the window with unsaved changes asks whether to save them; **Revert** discards them.
 

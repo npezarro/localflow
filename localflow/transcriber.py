@@ -53,6 +53,17 @@ class Transcriber:
         log.info("model %s ready in %.1fs", name, time.time() - t0)
         return time.time() - t0
 
+    def is_uncommon(self, word):
+        """True if Whisper's tokenizer needs several tokens for the word: names and jargon,
+        i.e. what it tends to misspell. Common words (and names it knows) are one token."""
+        model = self.model
+        if model is None:
+            return False
+        try:
+            return len(model.hf_tokenizer.encode(" " + word, add_special_tokens=False).ids) > 1
+        except Exception:
+            return False
+
     def transcribe(self, audio, language="en", vocabulary=None, beam_size=5):
         with self._lock:
             model = self.model

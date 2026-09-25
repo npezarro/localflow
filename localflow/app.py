@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 from . import __version__, audio, config, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
 from .history import History
 from .indicator import Indicator
+from .learn import Learner
 from .live import LiveSession
 from .settings_ui import SettingsPanel
 from .setup_ui import SetupDialog
@@ -29,6 +30,7 @@ class App:
     def __init__(self):
         self.cfg = config.load()
         self.history = History(self.cfg["history_limit"])
+        self.learner = Learner()
         self.transcriber = Transcriber()
         self.recorder = audio.Recorder(warm=self.cfg["warm_mic"])
         self.devices = [(None, "System default")]
@@ -112,6 +114,9 @@ class App:
         self.search_var.trace_add("write", lambda *_: self.refresh_history())
         ttk.Entry(bar, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=6)
         ttk.Button(bar, text="Copy", command=self.copy_selected).pack(side="left")
+        self.correct_btn = ttk.Button(bar, text="Save correction", command=self.save_correction,
+                                      state="disabled")
+        self.correct_btn.pack(side="left", padx=(4, 0))
         ttk.Button(bar, text="Delete", command=self.delete_selected).pack(side="left", padx=4)
         ttk.Button(bar, text="Clear all", command=self.clear_history).pack(side="left")
 
@@ -130,9 +135,15 @@ class App:
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._show_selected())
         self.tree.bind("<Double-1>", lambda _e: self.copy_selected())
         pane.add(frame, weight=3)
-        self.detail = tk.Text(pane, height=5, wrap="word", relief="flat", padx=8, pady=6)
-        self.detail.configure(state="disabled")
-        pane.add(self.detail, weight=1)
+        lower = ttk.Frame(pane)
+        self.detail = tk.Text(lower, height=5, wrap="word", relief="flat", padx=8, pady=6, undo=True)
+        self.detail.pack(fill="both", expand=True)
+        self.detail.bind("<<Modified>>", self._detail_modified)
+        self.detail_meta = tk.StringVar(value="Select a transcript. Fix any mistakes here and press "
+                                              "Save correction: LocalFlow learns from it.")
+        ttk.Label(lower, textvariable=self.detail_meta, foreground="#888", wraplength=700,
+                  justify="left").pack(fill="x", pady=(4, 0))
+        pane.add(lower, weight=1)
         self.refresh_history()
 
     def _tab_changed(self, _event):
@@ -326,7 +337,7 @@ class App:
                 st = audio.stats(samples)
                 if self.cfg["save_last_recording"]:
                     audio.save_wav(os.path.join(paths.data_dir(), "last-recording.wav"), samples)
-                cfg = dict(self.cfg, polish="off") if self.polish_paused else self.cfg
+                cfg = self._run_cfg()
                 result = pipeline.process(samples, cfg, self.transcriber,
                                           on_stage=lambda _s: self.ui_q.put(("overlay", "busy", "Cleaning up…")))
                 log.info("dictation: audio %.1fs peak %.3f rms %.4f | %s %.2fs%s | %d chars%s",
@@ -347,6 +358,7 @@ class App:
                 self._wait_for_keys_up()
                 self.paster.deliver(text, self.cfg["auto_paste"], self.cfg["restore_clipboard"])
                 self.ui_q.put(("transcript", item))
+                self._learn_from(text)
                 if polish_error:
                     self.ui_q.put(("polish_failed", polish_error[len("AI clean-up failed ("):-1]))
                 elif result["polished"]:
@@ -355,12 +367,33 @@ class App:
                 log.exception("transcription failed")
                 self.ui_q.put(("error", "Transcription failed: %s" % exc))
 
+    def _run_cfg(self):
+        """Settings for one dictation: yours plus what LocalFlow has learned."""
+        cfg = dict(self.cfg)
+        if self.polish_paused:
+            cfg["polish"] = "off"
+        if cfg.get("learn"):
+            cfg = self.learner.apply_to(cfg)
+        return cfg
+
+    def _learn_from(self, text):
+        if not self.cfg.get("learn"):
+            return
+        try:
+            promoted = self.learner.observe(text, self.transcriber.is_uncommon)
+        except Exception:
+            log.exception("learning failed")
+            return
+        if promoted:
+            self.ui_q.put(("learned", "Learned new word%s: %s" % ("s" if len(promoted) > 1 else "",
+                                                                  ", ".join(promoted))))
+
     def _live_loop(self):
         """Live typing: while recording, commit and type words about once a second."""
         while True:
             if self.live_q.get()[0] != "begin":
                 continue
-            cfg = dict(self.cfg)
+            cfg = self._run_cfg()
             session = LiveSession(lambda a, lang, prompt: self.transcriber.transcribe_words(a, lang, prompt), cfg)
             last_pass = time.monotonic()
             try:
@@ -399,6 +432,7 @@ class App:
             return
         item = self.history.add(text, seconds, "live:%s" % self.transcriber.model_name)
         self.ui_q.put(("transcript", item))
+        self._learn_from(text)
 
     def toggle_live(self):
         new = dict(self.cfg, live_typing=not self.cfg["live_typing"])
@@ -476,6 +510,9 @@ class App:
             self.show_window()
         elif kind == "setup":
             self.open_setup()
+        elif kind == "learned":
+            self.set_status(ev[1])
+            self.settings.refresh_learned()
         elif kind == "toggle_live":
             self.toggle_live()
         elif kind == "quit":
@@ -499,16 +536,46 @@ class App:
 
     def _show_selected(self):
         item = self._selected()
-        self.detail.configure(state="normal")
         self.detail.delete("1.0", "end")
         if item:
-            self.detail.insert("1.0", item["text"])
-            meta = "\n\n— %s, %.1fs" % (item.get("model", ""), item.get("seconds", 0))
-            if item.get("raw"):
-                meta += "\nBefore clean-up: " + item["raw"]
-            self.detail.insert("end", meta, "meta")
-            self.detail.tag_configure("meta", foreground="#888")
-        self.detail.configure(state="disabled")
+            self.detail.insert("1.0", item["text"].rstrip())
+            meta = "%s, %.1fs." % (item.get("model", ""), item.get("seconds", 0))
+            if item.get("original"):
+                meta += "  Corrected from: " + item["original"].strip()
+            elif item.get("raw"):
+                meta += "  Before clean-up: " + item["raw"].strip()
+            self.detail_meta.set(meta + "  Edit above and press Save correction to teach LocalFlow.")
+        self.detail.edit_modified(False)
+        self.correct_btn.configure(state="disabled")
+
+    def _detail_modified(self, _event):
+        if self.detail.edit_modified():
+            self.correct_btn.configure(state="normal" if self._selected() else "disabled")
+
+    def save_correction(self):
+        item = self._selected()
+        if not item:
+            return
+        old = item["text"]
+        new = self.detail.get("1.0", "end-1c").strip()
+        if not new or new == old.strip():
+            return
+        if old.endswith(" ") and not new.endswith("\n"):
+            new += " "
+        self.history.update(item["id"], text=new, original=item.get("original", old))
+        learned = []
+        if self.cfg.get("learn"):
+            learned = self.learner.learn_correction(old, new, self.transcriber.is_uncommon)
+            self.settings.refresh_learned()
+        output.set_clipboard(new)
+        self.refresh_history()
+        if self.tree.exists(item["id"]):
+            self.tree.selection_set(item["id"])
+        if learned:
+            self.set_status("Learned: " + "; ".join("“%s” → “%s”" % pair for pair in learned[:3])
+                            + ". Corrected text copied.")
+        else:
+            self.set_status("Correction saved and copied to the clipboard.")
 
     def copy_selected(self):
         item = self._selected()
@@ -611,7 +678,7 @@ class App:
                 samples = self.recorder.stop(keep_tail=False)
                 st = audio.stats(samples)
                 self.ui_q.put(("overlay", "busy", "Transcribing…"))
-                result = pipeline.process(samples, self.cfg, self.transcriber)
+                result = pipeline.process(samples, self._run_cfg(), self.transcriber)
                 if self.cfg["save_last_recording"]:
                     audio.save_wav(os.path.join(paths.data_dir(), "last-recording.wav"), samples)
                 verdict = ("Level looks good." if st["peak"] > 0.1 else
