@@ -29,6 +29,9 @@ BOOLS = [("auto_paste", "Paste into the focused app"),
          ("save_last_recording", "Keep the last recording (data/last-recording.wav) for troubleshooting")]
 
 
+FLOATS = {"release_tail": "Keep listening after release", "preroll": "Keep before press"}
+
+
 def _label_for(pairs, key):
     return next((label for k, label in pairs if k == key), pairs[0][1])
 
@@ -142,6 +145,11 @@ class SettingsPanel:
                    command=lambda: self.app.capture_hotkey(self.vars["paste_last_hotkey"])).pack(
             side="left", padx=4)
         self._row(s, "Paste last transcript", f)
+        self._row(s, "Keep listening after release",
+                  ttk.Spinbox(s, from_=0.0, to=3.0, increment=0.1, width=6, format="%.1f",
+                              textvariable=self._var("release_tail")),
+                  "Seconds the mic stays open after you let go of the hotkey (the pill keeps "
+                  "listening). Raise it if your last word gets cut off; 0 stops instantly.")
 
         s = self._section("Microphone")
         self.device_names = [n for _i, n in self.app.devices]
@@ -149,6 +157,11 @@ class SettingsPanel:
         ttk.Checkbutton(s, text="Keep the microphone ready (stops the first word getting cut off)",
                         variable=self._var("warm_mic", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
         s._row += 1
+        self._row(s, "Keep before press",
+                  ttk.Spinbox(s, from_=0.0, to=2.0, increment=0.1, width=6, format="%.1f",
+                              textvariable=self._var("preroll")),
+                  "Seconds of audio kept from just before you press the hotkey (needs the "
+                  "option above).")
         f = ttk.Frame(s)
         ttk.Button(f, text="Test microphone (speak for 4 s)", command=self.app.test_microphone).pack(side="left")
         self._row(s, "", f, "Records 4 seconds, then shows the level and what was heard "
@@ -195,8 +208,11 @@ class SettingsPanel:
         self.prompt_text = self._text(s, 3)
         self._row(s, "Custom instructions", self.prompt_text, "Blank = built-in instructions.")
         f = ttk.Frame(s)
-        ttk.Button(f, text="Test clean-up", command=self.app.test_polish).pack(side="left")
-        self._row(s, "", f)
+        ttk.Button(f, text="Set up / check…",
+                   command=lambda: self.app.open_setup(preselect=_key_for(POLISH, self.vars["polish"].get()))
+                   ).pack(side="left")
+        ttk.Button(f, text="Test clean-up", command=self.app.test_polish).pack(side="left", padx=6)
+        self._row(s, "", f, "Set up walks you through installing / signing in and checks it works.")
 
         s = self._section("API keys")
         store = keystore.backend_name()
@@ -289,6 +305,12 @@ class SettingsPanel:
                 new[key] = next((i for i, n in self.app.devices if n == var.get()), None)
             elif isinstance(var, tk.BooleanVar):
                 new[key] = bool(var.get())
+            elif key in FLOATS:
+                try:
+                    value = float(var.get())
+                except ValueError:
+                    raise ValueError("%s must be a number of seconds." % FLOATS[key])
+                new[key] = round(min(3.0, max(0.0, value)), 2)
             else:
                 new[key] = var.get().strip()
         if not new["model"]:

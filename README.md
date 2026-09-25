@@ -47,8 +47,8 @@ A floating pill appears at the bottom centre of the monitor you're working on (t
 
 **Settings tab:** changes take effect when you press **Save** (bottom of the tab, always visible). Leaving the tab or closing the window with unsaved changes asks whether to save them; **Revert** discards them.
 
-- **Dictation:** hotkey (type a combo like `ctrl+cmd`, `alt_r`, `ctrl+shift+space`, or click *Record…* and press it; `cmd` is the Windows key on Windows), mode (`hold` push-to-talk or `toggle`), and the paste-last hotkey.
-- **Microphone:** input device; **Keep the microphone ready** (on by default) keeps the input open and buffers the last half second, so your first word isn't cut off while the device wakes up (Bluetooth headsets can take a second). The OS microphone indicator stays on while LocalFlow runs; turn this off if you'd rather the mic only opens while you dictate. **Test microphone** records 4 seconds and shows the level and what was heard.
+- **Dictation:** hotkey (type a combo like `ctrl+cmd`, `alt_r`, `ctrl+shift+space`, or click *Record…* and press it; `cmd` is the Windows key on Windows), mode (`hold` push-to-talk or `toggle`), the paste-last hotkey, and **Keep listening after release** (0-3 s, default 0.3): how long the mic stays open after you let go of the hotkey, so a trailing word isn't cut off. The pill keeps showing the live waveform until it closes.
+- **Microphone:** input device; **Keep the microphone ready** (on by default) keeps the input open and buffers the last half second, so your first word isn't cut off while the device wakes up (Bluetooth headsets can take a second). The OS microphone indicator stays on while LocalFlow runs; turn this off if you'd rather the mic only opens while you dictate. **Keep before press** (0-2 s, default 0.5) sets how much of that buffer is kept. **Test microphone** records 4 seconds and shows the level and what was heard.
 - **Transcription engine:**
   - *On this computer*: Whisper runs locally. `base.en` is bundled; bigger models download once into `data/models`.
 
@@ -65,7 +65,9 @@ A floating pill appears at the bottom centre of the monitor you're working on (t
   - **ChatGPT:** uses your ChatGPT subscription through the Codex CLI (`codex login`). About 3-5 s.
   - **API key:** Groq (fastest, about 0.4 s), OpenAI, or a custom/local server such as Ollama.
 
-  *Test clean-up* runs a sample and, for Claude/ChatGPT, finds a working install automatically (on Windows this can be the copy inside WSL) and fills in the command. If clean-up fails or times out, the plain transcript is pasted instead.
+  A **setup assistant** opens the first time you launch LocalFlow, whenever you pick a clean-up option that hasn't been checked on this computer, and after clean-up fails (from *Settings → Set up / check…* or the tray menu any time). It tries every install it can find (on Windows including the copies inside WSL), says in plain words what's wrong with each (not installed, not signed in, not responding), and offers the fix: an install link, a **Sign in** button that opens a terminal running the sign-in, or an API key box it tests before saving. Nothing is turned on until a check passes.
+
+  If clean-up fails during dictation, the plain transcript is pasted, the pill says so, and after two failures in a row clean-up pauses until you fix it, so a broken setup never adds a delay to every dictation.
 - **API keys:** stored in the Windows Credential Manager / macOS Keychain, not in the data folder.
 - **Output:** paste into the focused app, restore the previous clipboard, remove filler words, trailing space, sounds, keep the last recording for troubleshooting.
 - **Words:** vocabulary (names and jargon to spell your way; this is the single biggest accuracy win for names) and replacements (`spoken => written`, e.g. `new line => \n`).

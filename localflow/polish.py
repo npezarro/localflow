@@ -111,6 +111,61 @@ def detect(name, cfg, timeout=40):
     return None, lines or ["%s not found on this computer" % name]
 
 
+INSTALL_URLS = {"claude": "https://code.claude.com/docs/en/setup",
+                "codex": "https://developers.openai.com/codex/cli"}
+LOGIN_ARGS = {"claude": [], "codex": ["login"]}  # `claude` alone walks you through sign-in
+
+
+def classify(error):
+    """Turn a CLI failure into a status the setup screen can explain."""
+    text = str(error).lower()
+    if "did not answer" in text:
+        return "timeout"
+    if any(k in text for k in ("not logged in", "/login", "log in", "login", "authenticat", "401",
+                                "unauthorized", "credentials")):
+        return "signed_out"
+    return "error"
+
+
+def diagnose(name, cfg, timeout=25, on_progress=None):
+    """Try every install of ``name``. Returns a list of dicts:
+    {"prefix", "label", "status": ok|signed_out|timeout|error, "detail"}; empty = not installed."""
+    report = []
+    for prefix in candidates(name):
+        label = prefix_to_text(prefix)
+        if on_progress:
+            on_progress("Checking %s…" % label)
+        try:
+            out = run_cli(prefix, name, cfg, "um testing one two three", timeout)
+            report.append({"prefix": prefix, "label": label, "status": "ok", "detail": out[:80]})
+            _found[name] = prefix
+            break
+        except Exception as exc:
+            report.append({"prefix": prefix, "label": label, "status": classify(exc),
+                           "detail": str(exc)[:200]})
+    return report
+
+
+def login_command(name, prefix):
+    """argv that opens a visible terminal running the CLI's sign-in."""
+    args = LOGIN_ARGS[name]
+    if IS_WIN:
+        if prefix[:1] == ["wsl.exe"]:
+            inner = prefix + [" ".join([name] + args)]
+        else:
+            inner = prefix + args
+        return ["cmd.exe", "/c", "start", "LocalFlow sign-in", "cmd.exe", "/k"] + inner
+    shell = " ".join(shlex.quote(p) for p in prefix + args)
+    if sys.platform == "darwin":
+        return ["osascript", "-e", 'tell application "Terminal" to do script "%s"' % shell.replace('"', '\\"'),
+                "-e", 'tell application "Terminal" to activate']
+    return ["x-terminal-emulator", "-e", shell]
+
+
+def open_login(name, prefix):
+    subprocess.Popen(login_command(name, prefix))
+
+
 def _env_with_path(prefix):
     """Apps launched from Finder/Explorer get a minimal PATH; npm-installed CLIs need node."""
     env = dict(os.environ)

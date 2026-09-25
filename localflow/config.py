@@ -29,7 +29,9 @@ DEFAULTS = {
     "polish_api_model": "",
     "polish_prompt": "",
     "polish_min_words": 4,
-    "polish_timeout": 20,
+    "polish_timeout": 12,
+    "polish_verified": "",  # provider whose setup last passed; anything else re-opens setup
+    "setup_seen": False,
     "claude_path": "",
     "codex_path": "",
     "language": "en",  # "auto" to detect
@@ -43,6 +45,8 @@ DEFAULTS = {
     "trailing_space": True,
     "sounds": True,
     "min_hold_seconds": 0.3,
+    "release_tail": 0.3,  # seconds the mic stays open after you let go of the hotkey
+    "preroll": 0.5,  # seconds kept from just before the hotkey (needs warm_mic)
     "vocabulary": [],  # words/names Whisper should spell your way
     "replacements": {},  # spoken -> written, e.g. {"new line": "\n"}
     "history_limit": 500,

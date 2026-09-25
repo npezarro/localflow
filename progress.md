@@ -13,3 +13,9 @@
 - Indicator: Wispr-style pill on the active monitor (foreground window's monitor on Windows, pointer's screen on Mac).
 - Verified on this PC: UI smoke (save/no/cancel paths), pill render + focus retention, control-path flow with fake mic, Groq STT 0.5-0.7 s, Groq/Claude/Codex clean-up, Windows WSL detection.
 - Not verified: OpenAI API defaults (no key), multi-monitor placement on real hardware, Mac pill transparency (CI smoke only).
+
+## 2026-09-24 v0.3.0
+- AI clean-up setup assistant (first launch / unverified provider / after failure / Settings / tray): per-install diagnosis (ok, signed out, not responding, error), Sign in button opens a terminal running the CLI login, API key test before save. Clean-up pauses after 2 consecutive failures.
+- Adjustable "Keep listening after release" (release_tail, 0-3 s) and "Keep before press" (preroll, 0-2 s).
+- Verified on this PC via tests/setup_smoke.py (real app): first-launch open, Claude detection picked WSL Ubuntu over signed-out native + npm installs, bad Groq key rejected, 2 failures pause + assistant on next show, tail/preroll saved and applied to the live recorder, invalid number rejected, zero keychain writes.
+- Confirmed no credentials in release zips (scan with positive control) and none in CI (no secrets configured).

@@ -13,6 +13,7 @@ from . import __version__, audio, config, hotkey, keystore, output, paths, pipel
 from .history import History
 from .indicator import Indicator
 from .settings_ui import SettingsPanel
+from .setup_ui import SetupDialog
 from .transcriber import Transcriber, is_local
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,10 @@ class App:
         self.ctl_q = queue.Queue()
         self.work_q = queue.Queue()
         self.record_started = 0.0
+        self.polish_failures = 0
+        self.polish_paused = False
+        self.pending_setup = None  # reason text; the setup assistant opens when the window is next shown
+        self.setup_dialog = None
 
         platform_fix.windows_dpi_aware()
         platform_fix.pin_macos_keyboard_layout()
@@ -58,6 +63,7 @@ class App:
         self.start_listener()
         self._open_mic()
         self.root.after(40, self._poll)
+        self.root.after(1200, self._maybe_setup)
         if IS_MAC and not platform_fix.macos_accessibility_trusted(prompt=True):
             self.set_status("Grant Accessibility + Input Monitoring in System Settings, then restart",
                             warn=True)
@@ -165,6 +171,7 @@ class App:
         menu = pystray.Menu(
             pystray.MenuItem("Show LocalFlow", lambda: self.ui_q.put(("show",)), default=True),
             pystray.MenuItem("Paste last transcript", lambda: self.ctl_q.put(("paste_last",))),
+            pystray.MenuItem("Set up AI clean-up…", lambda: self.ui_q.put(("setup",))),
             pystray.MenuItem("Quit", lambda: self.ui_q.put(("quit",))))
         self.tray = pystray.Icon("LocalFlow", img, "LocalFlow", menu)
         self.tray.run_detached()
@@ -181,6 +188,8 @@ class App:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+        if self.pending_setup:
+            self.open_setup(reason=self.pending_setup)
 
     def quit(self):
         try:
@@ -293,13 +302,15 @@ class App:
                 st = audio.stats(samples)
                 if self.cfg["save_last_recording"]:
                     audio.save_wav(os.path.join(paths.data_dir(), "last-recording.wav"), samples)
-                result = pipeline.process(samples, self.cfg, self.transcriber,
+                cfg = dict(self.cfg, polish="off") if self.polish_paused else self.cfg
+                result = pipeline.process(samples, cfg, self.transcriber,
                                           on_stage=lambda _s: self.ui_q.put(("overlay", "busy", "Cleaning up…")))
                 log.info("dictation: audio %.1fs peak %.3f rms %.4f | %s %.2fs%s | %d chars%s",
                          st["seconds"], st["peak"], st["rms"], result["engine"], result["stt_s"],
                          " + clean-up %.2fs" % result["polish_s"] if result["polished"] else "",
                          len(result["text"]), " | " + result["note"] if result["note"] else "")
-                if result["note"]:
+                polish_error = next((n for n in result["note"].split("; ") if n.startswith("AI clean-up failed")), "")
+                if result["note"] and not polish_error:
                     self.ui_q.put(("status_warn", result["note"]))
                 text = result["text"]
                 if not text.strip():
@@ -312,6 +323,10 @@ class App:
                 self._wait_for_keys_up()
                 self.paster.deliver(text, self.cfg["auto_paste"], self.cfg["restore_clipboard"])
                 self.ui_q.put(("transcript", item))
+                if polish_error:
+                    self.ui_q.put(("polish_failed", polish_error[len("AI clean-up failed ("):-1]))
+                elif result["polished"]:
+                    self.polish_failures = 0
             except Exception as exc:
                 log.exception("transcription failed")
                 self.ui_q.put(("error", "Transcription failed: %s" % exc))
@@ -372,6 +387,8 @@ class App:
             messagebox.showinfo(ev[1], ev[2], parent=self.root)
         elif kind == "status":
             self.set_status(ev[1])
+        elif kind == "polish_failed":
+            self._polish_failed(ev[1])
         elif kind == "setvar":
             self.settings.vars[ev[1]].set(ev[2])
         elif kind == "status_warn":
@@ -380,6 +397,8 @@ class App:
             ev[1].set(ev[2])
         elif kind == "show":
             self.show_window()
+        elif kind == "setup":
+            self.open_setup()
         elif kind == "quit":
             self.quit()
 
@@ -432,6 +451,10 @@ class App:
     # ------------------------------------------------------------------ settings
     def apply_settings(self, new):
         model_changed = new["model"] != self.cfg["model"]
+        polish_changed = new["polish"] != self.cfg["polish"]
+        if polish_changed:
+            self.polish_paused = False
+            self.polish_failures = 0
         self.cfg.clear()
         self.cfg.update(new)
         config.save(self.cfg)
@@ -442,6 +465,37 @@ class App:
             self.load_model(self.cfg["model"])
         else:
             self.set_status("Settings saved · %s" % self._engine_label())
+        if polish_changed and self.cfg["polish"] != "off" and self.cfg["polish_verified"] != self.cfg["polish"]:
+            self.root.after(100, lambda: self.open_setup(reason="Let's check that clean-up works before using it."))
+
+    # ------------------------------------------------------------------ AI clean-up setup
+    def _maybe_setup(self):
+        if not self.cfg["setup_seen"]:
+            self.open_setup()
+        elif self.cfg["polish"] != "off" and self.cfg["polish_verified"] != self.cfg["polish"]:
+            self.open_setup(reason="AI clean-up is turned on but hasn't been checked on this computer.")
+
+    def open_setup(self, preselect=None, reason=""):
+        self.pending_setup = None
+        if self.setup_dialog is not None and self.setup_dialog.win.winfo_exists():
+            self.setup_dialog.win.lift()
+            return
+        self.root.deiconify()
+        self.setup_dialog = SetupDialog(self, preselect=preselect, reason=reason)
+
+    def _polish_failed(self, reason):
+        self.polish_failures += 1
+        if self.cfg["polish_verified"]:
+            self.cfg["polish_verified"] = ""
+            config.save(self.cfg)
+        if self.polish_failures >= 2:
+            self.polish_paused = True
+            msg = "AI clean-up paused after repeated failures (%s). Open LocalFlow to fix it." % reason
+        else:
+            msg = "AI clean-up failed (%s); pasted the plain transcript." % reason
+        self.set_status(msg, warn=True)
+        self.show_overlay("message", "Clean-up failed · plain text pasted")
+        self.pending_setup = "AI clean-up just failed: %s" % reason
 
     def _engine_label(self):
         if self.cfg["engine"] == "cloud":
@@ -456,6 +510,8 @@ class App:
     def _open_mic(self):
         def run():
             try:
+                self.recorder.preroll = float(self.cfg["preroll"])
+                self.recorder.tail = float(self.cfg["release_tail"])
                 self.recorder.configure(self.cfg["input_device"], self.cfg["warm_mic"])
             except Exception as exc:
                 log.exception("opening microphone")

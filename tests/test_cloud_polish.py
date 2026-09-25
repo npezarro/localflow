@@ -159,3 +159,36 @@ def test_mac_monitor_coordinates():
     assert monitors.pick_screen((-5000, 0), frames) == 0
     # Second screen's visible frame (below its menu bar) -> Tk top-left coords.
     assert monitors.mac_to_tk((1440, 200, 1920, 1055), 900) == (1440, -355, 1920, 1055)
+
+
+def test_release_tail_keeps_recording_after_release():
+    import threading as th
+    import time as tm
+
+    rec = audio.Recorder(warm=True, preroll=0.0, tail=0.6)
+    rec._rate = 16000
+    rec._fake = None
+    rec._stream = type("S", (), {"active": True})()
+    block = np.ones((480, 1), dtype=np.float32) * 0.1  # 30 ms
+    rec.start()
+    for _ in range(10):  # 0.3 s while the key is held
+        rec._callback(block, 480, None, None)
+
+    def speak_after_release():  # the mic keeps delivering audio after the key comes up
+        for _ in range(12):
+            tm.sleep(0.03)
+            rec._callback(block, 480, None, None)
+
+    t = th.Thread(target=speak_after_release)
+    t.start()
+    out = rec.stop()
+    t.join()
+    assert len(out) / 16000 >= 0.6  # held audio plus what arrived during the tail
+
+
+def test_classify_cli_failures():
+    from localflow import polish
+
+    assert polish.classify("claude exited 1: Not logged in · Please run /login") == "signed_out"
+    assert polish.classify("claude did not answer within 25s") == "timeout"
+    assert polish.classify("codex exited 2: unexpected argument") == "error"
