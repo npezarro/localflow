@@ -61,13 +61,24 @@ class Transcriber:
             prompt = None
             if vocabulary:
                 prompt = "Vocabulary: " + ", ".join(vocabulary) + "."
-            segments, _info = model.transcribe(
-                audio,
+            kwargs = dict(
                 language=None if language in (None, "", "auto") else language,
                 beam_size=beam_size,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 700},
                 condition_on_previous_text=False,
                 initial_prompt=prompt,
+                without_timestamps=True,
             )
-            return " ".join(s.text.strip() for s in segments).strip()
+            # Voice-activity filtering stops Whisper inventing text over silence; keep it
+            # permissive so soft or clipped speech isn't thrown away.
+            segments, _info = model.transcribe(
+                audio, vad_filter=True,
+                vad_parameters={"threshold": 0.35, "min_silence_duration_ms": 1000,
+                                "speech_pad_ms": 400},
+                **kwargs)
+            text = " ".join(s.text.strip() for s in segments).strip()
+            if not text and len(audio) > 16000 * 0.6 and float(abs(audio).max()) > 0.02:
+                log.info("VAD found no speech in audible clip; retrying without VAD")
+                segments, _info = model.transcribe(audio, vad_filter=False, **kwargs)
+                text = " ".join(s.text.strip() for s in segments
+                                if s.no_speech_prob < 0.6).strip()
+            return text

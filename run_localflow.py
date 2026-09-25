@@ -9,7 +9,7 @@ if __name__ == "__main__":
     from localflow.__main__ import main
 
     code = main()
-    if "--selftest" in sys.argv:
+    if "--selftest" in sys.argv or "--smoke-ui" in sys.argv:
         sys.stdout and sys.stdout.flush()
         os._exit(code)
     sys.exit(code)

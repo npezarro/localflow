@@ -13,10 +13,30 @@ DEFAULTS = {
     "mode": "hold",
     "lock_key": "space",
     "paste_last_hotkey": "alt+shift+z",
+    # Transcription engine: "local" (Whisper on this machine) or "cloud" (OpenAI-compatible API)
+    "engine": "local",
     "model": "base.en",
+    "cloud_provider": "groq",
+    "cloud_base_url": "",  # custom provider only
+    "cloud_model": "",  # blank = provider default
+    "cloud_fallback_local": True,
+    # Optional AI clean-up: "off", "claude" (Claude Code login), "codex" (ChatGPT login), "api"
+    "polish": "off",
+    "claude_model": "sonnet",
+    "codex_model": "",
+    "polish_api_provider": "groq",
+    "polish_api_base_url": "",
+    "polish_api_model": "",
+    "polish_prompt": "",
+    "polish_min_words": 4,
+    "polish_timeout": 20,
+    "claude_path": "",
+    "codex_path": "",
     "language": "en",  # "auto" to detect
     "beam_size": 5,
     "input_device": None,  # None = system default microphone
+    "warm_mic": True,  # keep the mic open so the first word isn't clipped
+    "save_last_recording": True,  # data/last-recording.wav, for troubleshooting
     "auto_paste": True,
     "restore_clipboard": False,  # False = transcript stays on the clipboard
     "remove_fillers": True,

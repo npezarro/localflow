@@ -64,6 +64,9 @@ def run(argv):
             result["clipboard_roundtrip"] = output.get_clipboard() == result["text"]
         except Exception as exc:  # headless Linux CI has no clipboard
             result["clipboard_roundtrip"] = "unavailable: %s" % exc
+        from . import keystore
+
+        result["keychain"] = keystore.backend_name() or "none (data/secrets.json fallback)"
         _step("pynput")
         try:
             import pynput.keyboard  # noqa: F401  (import check for the bundled backend)

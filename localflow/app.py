@@ -1,4 +1,5 @@
 import logging
+import os
 import queue
 import socket
 import sys
@@ -8,8 +9,10 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-from . import __version__, audio, config, hotkey, output, paths, platform_fix, textproc
+from . import __version__, audio, config, hotkey, keystore, output, paths, pipeline, platform_fix, polish
 from .history import History
+from .indicator import Indicator
+from .settings_ui import SettingsPanel
 from .transcriber import Transcriber, is_local
 
 log = logging.getLogger(__name__)
@@ -17,7 +20,7 @@ IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 SINGLE_INSTANCE_PORT = 47219
 
-BG, FG, MUTED, ACCENT, RED = "#16171b", "#f2f2f2", "#9a9ca5", "#7c8cff", "#ff5a5f"
+RED = "#ff5a5f"
 
 
 class App:
@@ -25,18 +28,22 @@ class App:
         self.cfg = config.load()
         self.history = History(self.cfg["history_limit"])
         self.transcriber = Transcriber()
-        self.recorder = audio.Recorder()
+        self.recorder = audio.Recorder(warm=self.cfg["warm_mic"])
+        self.devices = [(None, "System default")]
+        try:
+            self.devices += audio.input_devices()
+        except Exception:
+            log.exception("listing input devices")
         self.ui_q = queue.Queue()
         self.ctl_q = queue.Queue()
         self.work_q = queue.Queue()
         self.record_started = 0.0
-        self.overlay_mode = None
 
         platform_fix.windows_dpi_aware()
         platform_fix.pin_macos_keyboard_layout()
         self.root = tk.Tk()
         self.root.title("LocalFlow")
-        self.root.geometry("720x560")
+        self.root.geometry("780x640")
         self.root.minsize(560, 420)
         self.paster = output.Paster()  # after Tk: both must be created on the main thread
 
@@ -49,6 +56,7 @@ class App:
         self.load_model(self.cfg["model"])
         self.listener = None
         self.start_listener()
+        self._open_mic()
         self.root.after(40, self._poll)
         if IS_MAC and not platform_fix.macos_accessibility_trusted(prompt=True):
             self.set_status("Grant Accessibility + Input Monitoring in System Settings, then restart",
@@ -78,8 +86,12 @@ class App:
         sett = ttk.Frame(nb, padding=8)
         nb.add(hist, text="Transcripts")
         nb.add(sett, text="Settings")
+        self.nb, self.settings_tab = nb, sett
         self._build_history(hist)
-        self._build_settings(sett)
+        self.settings = SettingsPanel(sett, self)
+        self._current_tab = str(hist)
+        self._reverting_tab = False
+        nb.bind("<<NotebookTabChanged>>", self._tab_changed)
         self._update_hint()
 
     def _build_history(self, parent):
@@ -113,107 +125,21 @@ class App:
         pane.add(self.detail, weight=1)
         self.refresh_history()
 
-    def _build_settings(self, parent):
-        canvas_row = 0
-        self.vars = {}
-        grid = ttk.Frame(parent)
-        grid.pack(fill="both", expand=True)
-        grid.columnconfigure(1, weight=1)
-
-        def row(label, widget, note=None):
-            nonlocal canvas_row
-            ttk.Label(grid, text=label).grid(row=canvas_row, column=0, sticky="w", pady=3, padx=(0, 10))
-            widget.grid(row=canvas_row, column=1, sticky="ew", pady=3)
-            if note:
-                ttk.Label(grid, text=note, foreground="#777").grid(row=canvas_row, column=2, sticky="w",
-                                                                   padx=6)
-            canvas_row += 1
-
-        def hotkey_field(key):
-            frame = ttk.Frame(grid)
-            var = tk.StringVar(value=self.cfg[key])
-            self.vars[key] = var
-            ttk.Entry(frame, textvariable=var, width=22).pack(side="left", fill="x", expand=True)
-            ttk.Button(frame, text="Record…", command=lambda: self.capture_hotkey(var)).pack(
-                side="left", padx=4)
-            return frame
-
-        row("Dictation hotkey", hotkey_field("hotkey"), "hold to talk")
-        self.vars["mode"] = tk.StringVar(value=self.cfg["mode"])
-        row("Mode", ttk.Combobox(grid, textvariable=self.vars["mode"], values=["hold", "toggle"],
-                                 state="readonly", width=12),
-            "hold: tap Space while holding for hands-free")
-        row("Paste last transcript", hotkey_field("paste_last_hotkey"))
-        self.vars["model"] = tk.StringVar(value=self.cfg["model"])
-        row("Model", ttk.Combobox(grid, textvariable=self.vars["model"], values=config.MODEL_CHOICES,
-                                  width=20), "downloads once into ./data/models")
-        self.vars["language"] = tk.StringVar(value=self.cfg["language"])
-        row("Language", ttk.Combobox(grid, textvariable=self.vars["language"],
-                                     values=["en", "auto", "es", "fr", "de", "it", "pt", "nl", "ja",
-                                             "zh", "ko", "ru", "hi"], width=8),
-            ".en models are English-only")
-        self.devices = [(None, "System default")]
-        try:
-            self.devices += audio.input_devices()
-        except Exception:
-            log.exception("listing input devices")
-        names = [n for _i, n in self.devices]
-        current = next((n for i, n in self.devices if i == self.cfg["input_device"]), names[0])
-        self.vars["input_device"] = tk.StringVar(value=current)
-        row("Microphone", ttk.Combobox(grid, textvariable=self.vars["input_device"], values=names,
-                                       state="readonly"))
-        for key, label in [("auto_paste", "Paste into the focused app"),
-                           ("restore_clipboard", "Restore previous clipboard after pasting"),
-                           ("remove_fillers", "Remove filler words (um, uh)"),
-                           ("trailing_space", "Add a trailing space"),
-                           ("sounds", "Start/stop sounds")]:
-            self.vars[key] = tk.BooleanVar(value=bool(self.cfg[key]))
-            row("", ttk.Checkbutton(grid, text=label, variable=self.vars[key]))
-
-        ttk.Label(grid, text="Vocabulary (one per line)").grid(row=canvas_row, column=0, sticky="nw",
-                                                              pady=3)
-        self.vocab_text = tk.Text(grid, height=3, width=30)
-        self.vocab_text.insert("1.0", "\n".join(self.cfg["vocabulary"]))
-        self.vocab_text.grid(row=canvas_row, column=1, sticky="ew", pady=3)
-        canvas_row += 1
-        ttk.Label(grid, text="Replacements\n(spoken => written)").grid(row=canvas_row, column=0,
-                                                                     sticky="nw", pady=3)
-        self.repl_text = tk.Text(grid, height=3, width=30)
-        self.repl_text.insert("1.0", "\n".join("%s => %s" % (k, v.replace("\n", "\\n"))
-                                               for k, v in self.cfg["replacements"].items()))
-        self.repl_text.grid(row=canvas_row, column=1, sticky="ew", pady=3)
-        canvas_row += 1
-
-        btns = ttk.Frame(parent)
-        btns.pack(fill="x", pady=(8, 0))
-        ttk.Button(btns, text="Save", command=self.save_settings).pack(side="left")
-        ttk.Label(btns, text="Data folder: " + paths.data_dir(), foreground="#777").pack(side="left",
-                                                                                        padx=10)
-        ttk.Button(btns, text="Quit", command=self.quit).pack(side="right")
+    def _tab_changed(self, _event):
+        new = self.nb.select()
+        if self._reverting_tab:
+            self._reverting_tab = False
+            self._current_tab = new
+            return
+        if self._current_tab == str(self.settings_tab) and new != self._current_tab:
+            if not self.settings.confirm_leave():
+                self._reverting_tab = True
+                self.nb.select(self.settings_tab)
+                return
+        self._current_tab = new
 
     def _build_overlay(self):
-        ov = tk.Toplevel(self.root)
-        ov.overrideredirect(True)
-        ov.configure(bg=BG)
-        ov.attributes("-topmost", True)
-        try:
-            ov.attributes("-alpha", 0.0)
-        except tk.TclError:
-            pass
-        self.ov_w, self.ov_h = 250, 46
-        self.ov_canvas = tk.Canvas(ov, width=self.ov_w, height=self.ov_h, bg=BG, highlightthickness=0)
-        self.ov_canvas.pack()
-        self.ov_dot = self.ov_canvas.create_oval(14, 17, 26, 29, fill=RED, outline="")
-        self.ov_text = self.ov_canvas.create_text(36, 23, anchor="w", fill=FG, text="",
-                                                  font=("TkDefaultFont", 11))
-        self.ov_bars = [self.ov_canvas.create_rectangle(0, 0, 0, 0, fill=ACCENT, outline="")
-                        for _ in range(12)]
-        self.levels = [0.0] * 12
-        self.overlay = ov
-        ov.geometry("%dx%d+-10000+-10000" % (self.ov_w, self.ov_h))
-        ov.update_idletasks()
-        if IS_WIN:
-            platform_fix.windows_no_activate(int(ov.wm_frame(), 16))
+        self.indicator = Indicator(self.root)
 
     def _install_close_behaviour(self):
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
@@ -244,6 +170,8 @@ class App:
         self.tray.run_detached()
 
     def hide_window(self):
+        if not self.settings.confirm_leave():
+            return
         if IS_WIN and not getattr(self, "tray", None):
             self.root.iconify()
         else:
@@ -278,35 +206,14 @@ class App:
         text += "  Paste last: %s." % hotkey.format_combo(self.cfg["paste_last_hotkey"])
         self.hint_var.set(text)
 
-    def show_overlay(self, mode, text):
-        self.overlay_mode = mode
-        self.ov_canvas.itemconfigure(self.ov_text, text=text)
-        self.ov_canvas.itemconfigure(self.ov_dot, fill=RED if mode in ("rec", "locked") else ACCENT)
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        x, y = (sw - self.ov_w) // 2, sh - self.ov_h - (110 if IS_WIN else 90)
-        self.overlay.geometry("%dx%d+%d+%d" % (self.ov_w, self.ov_h, x, y))
-        try:
-            self.overlay.attributes("-alpha", 0.92)
-        except tk.TclError:
-            pass
-        self.overlay.lift()
+    def show_overlay(self, mode, text=""):
+        kind = {"rec": "listening", "locked": "locked", "message": "message"}.get(mode)
+        if kind is None:
+            kind = "polish" if text.startswith("Cleaning") else "busy"
+        self.indicator.show(kind, text)
 
     def hide_overlay(self):
-        self.overlay_mode = None
-        try:
-            self.overlay.attributes("-alpha", 0.0)
-        except tk.TclError:
-            pass
-        self.overlay.geometry("+-10000+-10000")
-
-    def _draw_levels(self):
-        self.levels = self.levels[1:] + [self.recorder.level if self.overlay_mode in ("rec", "locked")
-                                         else 0.08]
-        x0 = self.ov_w - 12 * 7 - 12
-        for i, (bar, lv) in enumerate(zip(self.ov_bars, self.levels)):
-            h = 3 + lv * 26
-            x = x0 + i * 7
-            self.ov_canvas.coords(bar, x, 23 - h / 2, x + 4, 23 + h / 2)
+        self.indicator.hide()
 
     # ------------------------------------------------------------------ hotkeys
     def start_listener(self):
@@ -346,7 +253,7 @@ class App:
                         continue
                     if IS_WIN and "cmd" in hotkey.parse_combo(self.cfg["hotkey"]):
                         platform_fix.mask_windows_key()
-                    self.recorder.start(self.cfg["input_device"])
+                    self.recorder.start()
                     self.record_started = time.monotonic()
                     if self.cfg["sounds"]:
                         audio.play(audio.tone(880))
@@ -362,7 +269,7 @@ class App:
                     self.ui_q.put(("transcribing",))
                     self.work_q.put((samples, seconds))
                 elif cmd == "cancel":
-                    self.recorder.stop()
+                    self.recorder.stop(keep_tail=False)
                     self.ui_q.put(("idle",))
                 elif cmd == "paste_last":
                     last = self.history.last()
@@ -383,17 +290,25 @@ class App:
         while True:
             samples, seconds = self.work_q.get()
             try:
-                if not self.transcriber.ready.wait(timeout=600):
-                    raise RuntimeError("model is still loading")
-                t0 = time.time()
-                raw = self.transcriber.transcribe(samples, self.cfg["language"], self.cfg["vocabulary"],
-                                                  self.cfg["beam_size"])
-                text = textproc.clean(raw, self.cfg)
-                log.info("transcribed %.1fs audio in %.2fs", seconds, time.time() - t0)
+                st = audio.stats(samples)
+                if self.cfg["save_last_recording"]:
+                    audio.save_wav(os.path.join(paths.data_dir(), "last-recording.wav"), samples)
+                result = pipeline.process(samples, self.cfg, self.transcriber,
+                                          on_stage=lambda _s: self.ui_q.put(("overlay", "busy", "Cleaning up…")))
+                log.info("dictation: audio %.1fs peak %.3f rms %.4f | %s %.2fs%s | %d chars%s",
+                         st["seconds"], st["peak"], st["rms"], result["engine"], result["stt_s"],
+                         " + clean-up %.2fs" % result["polish_s"] if result["polished"] else "",
+                         len(result["text"]), " | " + result["note"] if result["note"] else "")
+                if result["note"]:
+                    self.ui_q.put(("status_warn", result["note"]))
+                text = result["text"]
                 if not text.strip():
-                    self.ui_q.put(("idle",))
+                    msg = ("Didn't catch anything. Microphone level was very low: check the input "
+                           "device in Settings." if st["peak"] < 0.02 else "Didn't catch any words.")
+                    self.ui_q.put(("error", msg))
                     continue
-                item = self.history.add(text, seconds, self.transcriber.model_name)
+                item = self.history.add(text, seconds, result["engine"],
+                                        raw=result["raw"] if result["polished"] else None)
                 self._wait_for_keys_up()
                 self.paster.deliver(text, self.cfg["auto_paste"], self.cfg["restore_clipboard"])
                 self.ui_q.put(("transcript", item))
@@ -423,8 +338,7 @@ class App:
                 self._handle(self.ui_q.get_nowait())
         except queue.Empty:
             pass
-        if self.overlay_mode:
-            self._draw_levels()
+        self.indicator.tick(self.recorder.level)
         self.root.after(40, self._poll)
 
     def _handle(self, ev):
@@ -441,10 +355,10 @@ class App:
             self.hide_overlay()
             self.refresh_history()
         elif kind == "error":
-            self.hide_overlay()
+            self.show_overlay("message", ev[1][:70])
             self.set_status(ev[1], warn=True)
         elif kind == "model_ready":
-            self.set_status("Ready · %s" % ev[1])
+            self.set_status("Ready · %s" % self._engine_label())
             if IS_MAC and self.listener and not self.listener.is_trusted:
                 self.set_status("Hotkeys blocked: allow LocalFlow in Privacy & Security > "
                                 "Accessibility and Input Monitoring, then restart", warn=True)
@@ -452,6 +366,16 @@ class App:
             self.set_status("Could not load %s: %s" % (ev[1], ev[2][:120]), color=RED)
             if ev[1] != self.transcriber.model_name and self.transcriber.model is not None:
                 self.transcriber.ready.set()  # keep using the previous model
+        elif kind == "overlay":
+            self.show_overlay(ev[1], ev[2])
+        elif kind == "dialog":
+            messagebox.showinfo(ev[1], ev[2], parent=self.root)
+        elif kind == "status":
+            self.set_status(ev[1])
+        elif kind == "setvar":
+            self.settings.vars[ev[1]].set(ev[2])
+        elif kind == "status_warn":
+            self.set_status(ev[1], warn=True)
         elif kind == "captured":
             ev[1].set(ev[2])
         elif kind == "show":
@@ -481,6 +405,11 @@ class App:
         self.detail.delete("1.0", "end")
         if item:
             self.detail.insert("1.0", item["text"])
+            meta = "\n\n— %s, %.1fs" % (item.get("model", ""), item.get("seconds", 0))
+            if item.get("raw"):
+                meta += "\nBefore clean-up: " + item["raw"]
+            self.detail.insert("end", meta, "meta")
+            self.detail.tag_configure("meta", foreground="#888")
         self.detail.configure(state="disabled")
 
     def copy_selected(self):
@@ -501,42 +430,141 @@ class App:
             self.refresh_history()
 
     # ------------------------------------------------------------------ settings
-    def save_settings(self):
-        new = dict(self.cfg)
-        try:
-            for key in ("hotkey", "paste_last_hotkey"):
-                hotkey.parse_combo(self.vars[key].get())
-                new[key] = self.vars[key].get().strip().lower()
-        except ValueError:
-            messagebox.showerror("LocalFlow", "Hotkeys can't be empty.")
-            return
-        for key in ("mode", "model", "language"):
-            new[key] = self.vars[key].get().strip()
-        for key in ("auto_paste", "restore_clipboard", "remove_fillers", "trailing_space", "sounds"):
-            new[key] = bool(self.vars[key].get())
-        dev_name = self.vars["input_device"].get()
-        new["input_device"] = next((i for i, n in self.devices if n == dev_name), None)
-        new["vocabulary"] = [w.strip() for w in self.vocab_text.get("1.0", "end").splitlines() if w.strip()]
-        repl = {}
-        for line in self.repl_text.get("1.0", "end").splitlines():
-            if "=>" in line:
-                spoken, written = line.split("=>", 1)
-                if spoken.strip():
-                    repl[spoken.strip()] = written.strip().replace("\\n", "\n")
-        new["replacements"] = repl
+    def apply_settings(self, new):
         model_changed = new["model"] != self.cfg["model"]
         self.cfg.clear()
         self.cfg.update(new)
         config.save(self.cfg)
         self.start_listener()
+        self._open_mic()
         self._update_hint()
         if model_changed:
             self.load_model(self.cfg["model"])
         else:
-            self.set_status("Settings saved · %s" % self.cfg["model"])
+            self.set_status("Settings saved · %s" % self._engine_label())
+
+    def _engine_label(self):
+        if self.cfg["engine"] == "cloud":
+            base, model, _k = pipeline.cloud_settings(self.cfg)
+            label = "%s (%s)" % (model, self.cfg["cloud_provider"])
+        else:
+            label = self.cfg["model"]
+        if self.cfg["polish"] != "off":
+            label += " + %s clean-up" % self.cfg["polish"]
+        return label
+
+    def _open_mic(self):
+        def run():
+            try:
+                self.recorder.configure(self.cfg["input_device"], self.cfg["warm_mic"])
+            except Exception as exc:
+                log.exception("opening microphone")
+                self.ui_q.put(("error", "Microphone error: %s" % exc))
+
+        threading.Thread(target=run, daemon=True, name="mic-open").start()
+
+    # ------------------------------------------------------------------ diagnostics
+    def test_microphone(self):
+        if self.settings.dirty and not self.settings.confirm_leave():
+            return
+
+        def run():
+            try:
+                self.ui_q.put(("overlay", "rec", "Test: speak now (4 s)…"))
+                self.recorder.start()
+                time.sleep(4)
+                samples = self.recorder.stop(keep_tail=False)
+                st = audio.stats(samples)
+                self.ui_q.put(("overlay", "busy", "Transcribing…"))
+                result = pipeline.process(samples, self.cfg, self.transcriber)
+                if self.cfg["save_last_recording"]:
+                    audio.save_wav(os.path.join(paths.data_dir(), "last-recording.wav"), samples)
+                verdict = ("Level looks good." if st["peak"] > 0.1 else
+                           "Very quiet: check the input device and its volume." if st["peak"] > 0.01 else
+                           "No sound: wrong input device, muted, or no microphone permission.")
+                msg = ("Heard: %s\n\nRecorded %.1fs, peak %.2f, rms %.3f. %s\nEngine: %s, %.1fs%s%s"
+                       % (result["text"].strip() or "(nothing)", st["seconds"], st["peak"], st["rms"], verdict,
+                          result["engine"], result["stt_s"],
+                          ", clean-up %.1fs" % result["polish_s"] if result["polished"] else "",
+                          "\n" + result["note"] if result["note"] else ""))
+                self.ui_q.put(("dialog", "Microphone test", msg))
+            except Exception as exc:
+                log.exception("mic test")
+                self.ui_q.put(("dialog", "Microphone test", "Failed: %s" % exc))
+            finally:
+                self.ui_q.put(("idle",))
+
+        threading.Thread(target=run, daemon=True, name="mic-test").start()
+
+    def test_polish(self):
+        try:
+            cfg = self.settings.collect()
+        except ValueError as exc:
+            messagebox.showerror("LocalFlow", str(exc))
+            return
+        if cfg["polish"] == "off":
+            messagebox.showinfo("LocalFlow", "Pick a clean-up option first.")
+            return
+        sample = ("um so I think we should uh meet on tuesday at 3 pm and then like send the deck "
+                  "to sarah, actually no wednesday")
+        keys = {k: v.get().strip() for k, v in self.settings.key_vars.items()}
+        self.set_status("Testing clean-up with %s…" % cfg["polish"], warn=True)
+
+        def run():
+            found = ""
+            provider = cfg["polish"]
+            if provider in ("claude", "codex") and not cfg[provider + "_path"]:
+                self.ui_q.put(("status_warn", "Looking for a working %s install…" % provider))
+                label, lines = polish.detect(provider, cfg)
+                found = "Checked:\n" + "\n".join(lines) + "\n\n"
+                if not label:
+                    self.ui_q.put(("dialog", "AI clean-up test", found + "No working install found."))
+                    self.ui_q.put(("status", "Ready · %s" % self._engine_label()))
+                    return
+                cfg[provider + "_path"] = label
+                self.ui_q.put(("setvar", provider + "_path", label))
+            t0 = time.time()
+            try:
+                out = polish.polish(sample, cfg, lambda name: keys.get(name) or keystore.get(name))
+                msg = found + "In:  %s\n\nOut: %s\n\n%.1f s" % (sample, out, time.time() - t0)
+                if found:
+                    msg += "\n\nThe working command was filled in; press Save to keep it."
+            except Exception as exc:
+                msg = found + "Failed after %.1f s:\n%s" % (time.time() - t0, exc)
+            self.ui_q.put(("dialog", "AI clean-up test", msg))
+            self.ui_q.put(("status", "Ready · %s" % self._engine_label()))
+
+        threading.Thread(target=run, daemon=True, name="polish-test").start()
 
     def run(self):
         self.root.mainloop()
+
+
+def _smoke(app):
+    """CI: prove the packaged GUI starts (window, pill, settings, hotkey listener, model)."""
+    import json
+
+    out = sys.argv[sys.argv.index("--smoke-ui") + 1] if len(sys.argv) > sys.argv.index("--smoke-ui") + 1 else None
+    started = time.time()
+
+    def check():
+        if not app.transcriber.ready.is_set() and time.time() - started < 120:
+            app.root.after(250, check)
+            return
+        app.indicator.show("listening")
+        app.indicator.tick(0.5)
+        app.nb.select(app.settings_tab)
+        app.root.update()
+        result = {"ok": app.transcriber.ready.is_set(), "status": app.status_var.get(),
+                  "settings_fields": len(app.settings.vars), "indicator": app.indicator.mode,
+                  "listener": app.listener is not None}
+        if out:
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
+        app.indicator.hide()
+        app.quit()
+
+    app.root.after(500, check)
 
 
 def _single_instance():
@@ -557,6 +585,9 @@ def main():
         messagebox.showinfo("LocalFlow", "LocalFlow is already running.")
         return 1
     log.info("LocalFlow %s starting; data dir %s", __version__, paths.data_dir())
-    App().run()
+    app = App()
+    if "--smoke-ui" in sys.argv:
+        _smoke(app)
+    app.run()
     guard.close()
     return 0

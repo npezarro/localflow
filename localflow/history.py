@@ -34,9 +34,11 @@ class History:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
         os.replace(tmp, self.path)
 
-    def add(self, text, seconds=0.0, model=""):
+    def add(self, text, seconds=0.0, model="", raw=None):
         item = {"id": uuid.uuid4().hex[:12], "ts": time.time(), "text": text,
                 "seconds": round(seconds, 1), "model": model}
+        if raw and raw.strip() != text.strip():
+            item["raw"] = raw
         with self._lock:
             self.items.append(item)
             trimmed = len(self.items) > self.limit

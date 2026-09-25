@@ -1,6 +1,9 @@
+import collections
+import io
 import logging
 import os
 import threading
+import time
 import wave
 
 import numpy as np
@@ -22,10 +25,57 @@ def load_wav(path):
         data /= float(2 ** (8 * width - 1))
     if channels > 1:
         data = data.reshape(-1, channels).mean(axis=1)
-    if rate != SAMPLE_RATE:
-        n = int(len(data) * SAMPLE_RATE / rate)
-        data = np.interp(np.linspace(0, len(data), n, endpoint=False), np.arange(len(data)), data)
-    return data.astype(np.float32)
+    return resample(data, rate)
+
+
+def resample(data, rate):
+    """Resample to 16 kHz with a box low-pass first so downsampling doesn't alias."""
+    if rate == SAMPLE_RATE or len(data) == 0:
+        return data.astype(np.float32)
+    if rate > SAMPLE_RATE:
+        width = int(round(rate / SAMPLE_RATE))
+        if width > 1:
+            data = np.convolve(data, np.ones(width) / width, mode="same")
+    n = int(len(data) * SAMPLE_RATE / rate)
+    out = np.interp(np.linspace(0, len(data), n, endpoint=False), np.arange(len(data)), data)
+    return out.astype(np.float32)
+
+
+def to_wav_bytes(samples):
+    pcm = (np.clip(samples, -1, 1) * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+def save_wav(path, samples):
+    with open(path, "wb") as f:
+        f.write(to_wav_bytes(samples))
+
+
+def stats(samples):
+    if len(samples) == 0:
+        return {"seconds": 0.0, "peak": 0.0, "rms": 0.0}
+    return {"seconds": round(len(samples) / SAMPLE_RATE, 2),
+            "peak": round(float(np.max(np.abs(samples))), 4),
+            "rms": round(float(np.sqrt(np.mean(samples ** 2))), 5)}
+
+
+def normalize(samples, target_peak=0.7, max_gain=12.0):
+    """Quiet microphones make the voice-activity filter drop real speech; bring the level up."""
+    if len(samples) == 0:
+        return samples
+    peak = float(np.max(np.abs(samples)))
+    if peak < 1e-4:
+        return samples
+    gain = min(max_gain, target_peak / peak)
+    if gain <= 1.0:
+        return samples
+    return (samples * gain).astype(np.float32)
 
 
 def input_devices():
@@ -39,62 +89,128 @@ def input_devices():
 
 
 class Recorder:
-    """Opens the mic only while dictating (so the OS mic indicator means something)."""
+    """Microphone capture.
 
-    def __init__(self):
+    With ``warm=True`` the input stream stays open and keeps the last ``preroll``
+    seconds in a ring buffer, so the first syllable spoken as the hotkey goes down
+    is not lost (opening a device takes 100 ms to over a second on Bluetooth).
+    With ``warm=False`` the mic opens only while dictating.
+    """
+
+    def __init__(self, warm=True, preroll=0.5, tail=0.3):
+        self.warm = warm
+        self.preroll = preroll
+        self.tail = tail
+        self.device = None
         self._stream = None
+        self._rate = SAMPLE_RATE
+        self._recording = False
         self._chunks = []
+        self._ring = collections.deque()
+        self._ring_len = 0
         self._lock = threading.Lock()
         self.level = 0.0
+        self.last_error = None
         # Test hook: feed a WAV file instead of the microphone.
         self._fake = os.environ.get("LOCALFLOW_FAKE_MIC")
 
-    def start(self, device=None):
-        with self._lock:
-            self._chunks = []
-        self.level = 0.0
-        if self._fake:
-            return
+    # --- stream management -----------------------------------------------------------
+    def configure(self, device=None, warm=True):
+        changed = device != self.device or warm != self.warm
+        self.device, self.warm = device, warm
+        if changed:
+            self.close()
+        if self.warm and not self._fake:
+            self._ensure_stream()
+
+    def _open(self, device, rate):
         import sounddevice as sd
 
-        try:
-            self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-                                          device=device, callback=self._callback)
-        except Exception:
-            if device is None:
-                raise
-            log.warning("input device %r failed, using default", device)
-            self._stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-                                          callback=self._callback)
-        self._stream.start()
+        stream = sd.InputStream(samplerate=rate, channels=1, dtype="float32", device=device,
+                                callback=self._callback, blocksize=int(rate * 0.03))
+        stream.start()
+        return stream
 
-    def _callback(self, indata, frames, time_info, status):
-        chunk = indata[:, 0].copy()
-        with self._lock:
-            self._chunks.append(chunk)
-        rms = float(np.sqrt(np.mean(chunk ** 2))) if len(chunk) else 0.0
-        self.level = min(1.0, rms * 12)
+    def _ensure_stream(self):
+        if self._stream is not None and self._stream.active:
+            return
+        self.close()
+        import sounddevice as sd
 
-    def stop(self):
-        if self._fake:
-            return load_wav(self._fake)
+        attempts = []
+        for device in ([self.device, None] if self.device is not None else [None]):
+            try:
+                native = int(sd.query_devices(device, "input")["default_samplerate"])
+            except Exception:
+                native = 48000
+            for rate in (SAMPLE_RATE, native):
+                try:
+                    self._stream = self._open(device, rate)
+                    self._rate = rate
+                    if device != self.device:
+                        log.warning("input device %r failed; using system default", self.device)
+                    log.info("mic open: device=%r rate=%d warm=%s", device, rate, self.warm)
+                    self.last_error = None
+                    return
+                except Exception as exc:
+                    attempts.append("%r@%d: %s" % (device, rate, exc))
+        self.last_error = "; ".join(attempts)
+        raise RuntimeError("could not open microphone (%s)" % self.last_error)
+
+    def close(self):
         stream, self._stream = self._stream, None
         if stream is not None:
             try:
                 stream.stop()
                 stream.close()
             except Exception:
-                log.exception("closing input stream")
+                log.debug("closing input stream", exc_info=True)
+
+    def _callback(self, indata, frames, time_info, status):
+        chunk = indata[:, 0].copy()
+        rms = float(np.sqrt(np.mean(chunk ** 2))) if len(chunk) else 0.0
+        self.level = min(1.0, rms * 12)
+        with self._lock:
+            if self._recording:
+                self._chunks.append(chunk)
+            else:
+                self._ring.append(chunk)
+                self._ring_len += len(chunk)
+                limit = int(self.preroll * self._rate)
+                while self._ring and self._ring_len - len(self._ring[0]) >= limit:
+                    self._ring_len -= len(self._ring.popleft())
+
+    # --- dictation -------------------------------------------------------------------
+    def start(self):
+        if self._fake:
+            self._recording = True
+            return
+        self._ensure_stream()
+        with self._lock:
+            self._chunks = list(self._ring) if self.warm else []
+            self._ring.clear()
+            self._ring_len = 0
+            self._recording = True
+
+    def stop(self, keep_tail=True):
+        if self._fake:
+            self._recording = False
+            return load_wav(self._fake)
+        if keep_tail and self.tail > 0 and self._recording:
+            time.sleep(self.tail)  # the last word often trails the key release
         with self._lock:
             chunks, self._chunks = self._chunks, []
-        self.level = 0.0
+            self._recording = False
+        if not self.warm:
+            self.close()
+            self.level = 0.0
         if not chunks:
             return np.zeros(0, dtype=np.float32)
-        return np.concatenate(chunks)
+        return resample(np.concatenate(chunks), self._rate)
 
     @property
     def active(self):
-        return self._stream is not None
+        return self._recording
 
 
 def tone(freq, ms=70, volume=0.12, rate=44100):

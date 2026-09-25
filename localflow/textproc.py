@@ -7,7 +7,7 @@ _CAP = "\x00"  # marks where a capitalised filler was removed
 
 def remove_fillers(text):
     def drop(m):
-        return m.group(1) + (_CAP if m.group(2)[0].isupper() else "")
+        return m.group(1) + (_CAP if m.group(2)[0].isupper() or m.start() == 0 else "")
 
     out = _FILLER_RE.sub(drop, text)
     out = re.sub(r"\s+([,.;:!?])", r"\1", out)

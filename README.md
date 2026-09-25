@@ -41,32 +41,38 @@ Open `LocalFlow.app`. macOS will ask for three permissions; grant each, then qui
 | Cancel | `Esc` | `Esc` |
 | Paste last transcript again | `Alt` + `Shift` + `Z` | `Option` + `Shift` + `Z` |
 
-A small pill at the bottom of the screen shows when LocalFlow is listening and transcribing. Taps shorter than 0.3 s are ignored, and if you press a different key while holding the hotkey (for example `Ctrl`+`Win`+`D`), LocalFlow backs off so your normal shortcuts still work.
+A floating pill appears at the bottom centre of the monitor you're working on (the one with the focused window) while you dictate: a live waveform that follows your voice, a red dot in hands-free mode, then a travelling wave while it transcribes (blue while AI clean-up runs). It never takes focus, so the text still lands in your app. Taps shorter than 0.3 s are ignored, and if you press a different key while holding the hotkey (for example `Ctrl`+`Win`+`D`), LocalFlow backs off so your normal shortcuts still work.
 
 **Transcripts tab:** every dictation, newest first. Search, double-click to copy, delete, or clear.
 
-**Settings tab:**
+**Settings tab:** changes take effect when you press **Save** (bottom of the tab, always visible). Leaving the tab or closing the window with unsaved changes asks whether to save them; **Revert** discards them.
 
-- **Dictation hotkey / Paste last:** type a combo (`ctrl+cmd`, `alt_r`, `ctrl+shift+space`) or click *Record…* and press it. `cmd` is the Windows key on Windows. A single right-hand modifier such as `alt_r` (right Option) makes a nice one-key hotkey.
-- **Mode:** `hold` (push-to-talk) or `toggle` (press once to start, again to stop).
-- **Model:** bigger is more accurate and slower. Anything other than the bundled `base.en` downloads once into `data/models` and is reused offline after that.
+- **Dictation:** hotkey (type a combo like `ctrl+cmd`, `alt_r`, `ctrl+shift+space`, or click *Record…* and press it; `cmd` is the Windows key on Windows), mode (`hold` push-to-talk or `toggle`), and the paste-last hotkey.
+- **Microphone:** input device; **Keep the microphone ready** (on by default) keeps the input open and buffers the last half second, so your first word isn't cut off while the device wakes up (Bluetooth headsets can take a second). The OS microphone indicator stays on while LocalFlow runs; turn this off if you'd rather the mic only opens while you dictate. **Test microphone** records 4 seconds and shows the level and what was heard.
+- **Transcription engine:**
+  - *On this computer*: Whisper runs locally. `base.en` is bundled; bigger models download once into `data/models`.
 
-  | Model | Download | Notes |
-  |---|---|---|
-  | `tiny.en` | 75 MB | fastest, rough |
-  | `base.en` | 145 MB | bundled default |
-  | `small.en` | 480 MB | good balance on a modern laptop |
-  | `distil-large-v3` | 1.5 GB | near large-model accuracy, English |
-  | `large-v3-turbo` | 1.6 GB | best accuracy, multilingual, needs a fast CPU |
-  | `medium.en` | 1.5 GB | |
+    | Model | Download | Notes |
+    |---|---|---|
+    | `base.en` | 145 MB | bundled default, fastest |
+    | `small.en` | 480 MB | more accurate, about 2x slower |
+    | `distil-large-v3` | 1.5 GB | English, near large-model accuracy |
+    | `large-v3-turbo` | 1.6 GB | best local accuracy, multilingual, needs Apple Silicon or a fast CPU |
 
-- **Language:** `en` or `auto` (auto-detect needs a model without `.en`).
-- **Microphone:** pick an input device or use the system default.
-- **Paste into the focused app:** off = only copy to the clipboard.
-- **Restore previous clipboard:** off (default) = the transcript stays on the clipboard.
-- **Remove filler words**, **trailing space**, **sounds**.
-- **Vocabulary:** names and jargon Whisper should spell your way (one per line).
-- **Replacements:** `spoken => written`, one per line. Examples: `new line => \n`, `my email => me@example.com`.
+  - *Online API*: sends the recording to an OpenAI-compatible speech API. **Groq** (`whisper-large-v3-turbo`) is the recommended choice: about half a second per dictation and a free tier. **OpenAI** (`gpt-transcribe`) and any **custom** OpenAI-compatible server also work. If the service is unreachable, LocalFlow falls back to the local model.
+- **AI clean-up (optional):** a second pass that fixes punctuation, removes false starts and applies self-corrections ("Tuesday, actually Wednesday" becomes "Wednesday"), like Wispr's formatting. Choose:
+  - **Claude:** uses your Claude subscription through Claude Code (`claude`), which must be installed and signed in on the computer. About 2-4 s.
+  - **ChatGPT:** uses your ChatGPT subscription through the Codex CLI (`codex login`). About 3-5 s.
+  - **API key:** Groq (fastest, about 0.4 s), OpenAI, or a custom/local server such as Ollama.
+
+  *Test clean-up* runs a sample and, for Claude/ChatGPT, finds a working install automatically (on Windows this can be the copy inside WSL) and fills in the command. If clean-up fails or times out, the plain transcript is pasted instead.
+- **API keys:** stored in the Windows Credential Manager / macOS Keychain, not in the data folder.
+- **Output:** paste into the focused app, restore the previous clipboard, remove filler words, trailing space, sounds, keep the last recording for troubleshooting.
+- **Words:** vocabulary (names and jargon to spell your way; this is the single biggest accuracy win for names) and replacements (`spoken => written`, e.g. `new line => \n`).
+
+### Why subscriptions only cover clean-up, not transcription
+
+Neither Anthropic nor OpenAI offers speech-to-text on a subscription login. Claude's dictation only exists inside Claude Code, and ChatGPT's transcription endpoint is private and requires impersonating OpenAI's own apps, which LocalFlow deliberately doesn't do. Online transcription therefore uses an API key (Groq's free tier covers normal dictation use), while the clean-up pass can use your Claude or ChatGPT subscription through their official command-line tools.
 
 ## Portable data
 
@@ -77,7 +83,8 @@ LocalFlow/
   LocalFlow.exe          (Windows)  or  LocalFlow.app (macOS)
   data/
     config.json          settings (editable by hand while LocalFlow is closed)
-    history.jsonl        transcripts
+    history.jsonl        transcripts (with the pre-clean-up text when AI clean-up ran)
+    last-recording.wav   your most recent dictation, for troubleshooting (optional)
     models/              downloaded models
     localflow.log        log for troubleshooting
 ```
@@ -86,9 +93,12 @@ Move or copy the folder and everything comes with it; delete it to uninstall. If
 
 ## Compared with Wispr Flow
 
-Same core loop: hold-to-talk, hands-free lock, paste into any app, history, dictionary/snippets. Differences: transcription is plain local Whisper, so there is no cloud LLM rewriting pass (tone adjustment, "command mode", automatic list formatting), and on Mac the default hotkey is Control+Option because the Fn key is not reliably visible to apps without a kernel-level helper.
+Same core loop: hold-to-talk, hands-free lock, floating waveform pill, paste into any app, history, dictionary/snippets, optional AI formatting. Differences: no "command mode" (editing selected text by voice) or per-app tone styles yet, and on Mac the default hotkey is Control+Option because the Fn key is not reliably visible to apps without a kernel-level helper.
 
 ## Troubleshooting
+
+- **Words missing or wrong:** run *Settings → Test microphone*. A low peak means the wrong input or a muted mic. Keep *Keep the microphone ready* on so the first word isn't clipped. Add names to *Vocabulary*. For the best accuracy switch the engine to Groq, or the local model to `small.en` / `large-v3-turbo`. `data/localflow.log` records each dictation's length, level, engine and timing, and `data/last-recording.wav` is exactly what was transcribed.
+- **Claude/ChatGPT clean-up fails:** press *Test clean-up*; it lists every install it tried and why each failed (for example "Not logged in"). Sign in with `claude` or `codex login`, or put a working command in *Claude command* / *Codex command*.
 
 - **Nothing happens on the hotkey (Mac):** Accessibility and Input Monitoring must both be on for LocalFlow, then restart it. After updating to a new build you may need to remove and re-add it in both lists.
 - **Text is copied but not pasted:** some elevated (admin) windows on Windows block synthetic keystrokes from normal apps; press `Ctrl`+`V` yourself or run LocalFlow as admin.
