@@ -106,6 +106,7 @@ class Recorder:
         self._rate = SAMPLE_RATE
         self._recording = False
         self._chunks = []
+        self.offset = 0.0  # seconds of this recording already dropped by trim_before()
         self._ring = collections.deque()
         self._ring_len = 0
         self._lock = threading.Lock()
@@ -182,6 +183,7 @@ class Recorder:
 
     # --- dictation -------------------------------------------------------------------
     def start(self):
+        self.offset = 0.0
         if self._fake:
             self._recording = True
             self._fake_started = time.monotonic()
@@ -194,9 +196,13 @@ class Recorder:
             self._recording = True
 
     def stop(self, keep_tail=True):
+        """Returns the audio since ``self.offset`` (all of it unless trim_before() was used)."""
         if self._fake:
             self._recording = False
-            return load_wav(self._fake)
+            full = load_wav(self._fake)
+            if os.environ.get("LOCALFLOW_FAKE_MIC_REALTIME") == "1":  # like a real mic: only what was "said"
+                full = full[:int((time.monotonic() - self._fake_started + self.tail) * SAMPLE_RATE)]
+            return full[int(self.offset * SAMPLE_RATE):]
         if keep_tail and self.tail > 0 and self._recording:
             time.sleep(self.tail)  # the last word often trails the key release
         with self._lock:
@@ -210,15 +216,30 @@ class Recorder:
         return resample(np.concatenate(chunks), self._rate)
 
     def peek(self):
-        """The recording so far (16 kHz), without stopping it. Used by live typing."""
+        """(audio since ``offset``, offset) without stopping. Used by live typing."""
         if self._fake:
             full = load_wav(self._fake)
-            return full[:int((time.monotonic() - self._fake_started) * SAMPLE_RATE)]
+            end = int((time.monotonic() - self._fake_started) * SAMPLE_RATE)
+            return full[int(self.offset * SAMPLE_RATE):end], self.offset
         with self._lock:
-            chunks = list(self._chunks)
+            chunks, offset = list(self._chunks), self.offset
         if not chunks:
-            return np.zeros(0, dtype=np.float32)
-        return resample(np.concatenate(chunks), self._rate)
+            return np.zeros(0, dtype=np.float32), offset
+        return resample(np.concatenate(chunks), self._rate), offset
+
+    def trim_before(self, seconds):
+        """Forget audio before ``seconds`` into the recording (continuous live mode would
+        otherwise keep every minute of audio in memory)."""
+        with self._lock:
+            if self._fake:
+                self.offset = max(self.offset, seconds)
+                return
+            while self._chunks:
+                dur = len(self._chunks[0]) / self._rate
+                if self.offset + dur > seconds:
+                    break
+                self._chunks.pop(0)
+                self.offset += dur
 
     @property
     def active(self):

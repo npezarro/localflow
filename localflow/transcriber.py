@@ -31,6 +31,18 @@ def is_local(name):
     return os.path.isdir(cached) and bool(os.listdir(cached))
 
 
+def speech_in(samples, threshold=0.3):
+    """Does this audio contain speech? (Silero VAD, bundled with faster-whisper.)
+    Deliberately sensitive: calling a pause 'silence' too early cuts a word in half,
+    while missing a pause only delays text by a second."""
+    if len(samples) < 16000 * 0.25:
+        return False
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+    opts = VadOptions(threshold=threshold, min_speech_duration_ms=80, min_silence_duration_ms=300)
+    return bool(get_speech_timestamps(samples, opts))
+
+
 class Transcriber:
     def __init__(self):
         self.model = None
@@ -95,7 +107,7 @@ class Transcriber:
             return text
 
     def transcribe_words(self, audio, language="en", prompt=None, beam_size=1):
-        """Word-level hypothesis for live typing: [(start_s, end_s, text_with_leading_space)]."""
+        """Word-level hypothesis for live typing: [(start_s, end_s, text_with_leading_space, probability)]."""
         with self._lock:
             model = self.model
             if model is None:
@@ -124,5 +136,5 @@ class Transcriber:
                 if seg.no_speech_prob > 0.6:
                     continue
                 for w in seg.words or []:
-                    words.append((float(w.start), float(w.end), w.word))
+                    words.append((float(w.start), float(w.end), w.word, float(w.probability)))
             return words

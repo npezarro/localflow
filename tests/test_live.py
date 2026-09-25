@@ -92,3 +92,9 @@ def test_windows_unicode_events_handle_surrogates_and_newlines():
 
     events = typer._win_text_events("a😀\n")
     assert len(events) == 2 + 4 + 2  # 'a' down/up, surrogate pair = 2 units x down/up, Enter down/up
+
+
+def test_new_sentence_after_a_pause_is_capitalised():
+    s = LiveSession(None, cfg(trailing_space=False))
+    assert s._commit([(0, 1, " Americans.")]) == "Americans."
+    assert s._commit([(2, 3, " ask"), (3, 4, " not")]) == " Ask not"

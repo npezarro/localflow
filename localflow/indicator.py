@@ -91,6 +91,8 @@ class Indicator:
             pass
 
     def _width_for(self, mode, text):
+        if mode == "continuous":
+            return 176
         extra = 38 if self.live and mode in ("listening", "locked") else 0
         if mode == "locked":
             return 196 + extra
@@ -131,7 +133,12 @@ class Indicator:
             c.create_text(width - 14, mid, text="hands-free", anchor="e", fill=DIM,
                           font=("TkDefaultFont", 8))
             left = 30
-        right = 84 if self.mode == "locked" else 20
+        if self.mode == "continuous":  # always-on live listening
+            c.create_oval(14, mid - 4, 22, mid + 4, fill=RED, outline="")
+            c.create_text(width - 14, mid, text="LIVE", anchor="e", fill=ACCENT,
+                          font=("TkDefaultFont", 8, "bold"))
+            left = 30
+        right = 84 if self.mode == "locked" else 50 if self.mode == "continuous" else 20
         if self.live and self.mode in ("listening", "locked"):
             right += 38
             c.create_text(width - (84 if self.mode == "locked" else 16), mid, text="LIVE", anchor="e",
@@ -141,7 +148,7 @@ class Indicator:
         t = time.monotonic()
         for i in range(N_BARS):
             centre_weight = 1 - abs(i - (N_BARS - 1) / 2) / (N_BARS / 2)  # taller in the middle
-            if self.mode in ("listening", "locked"):
+            if self.mode in ("listening", "locked", "continuous"):
                 lv = self.levels[-1 - abs(i - N_BARS // 2)]  # recent level radiates from the centre
                 wobble = 0.75 + 0.25 * math.sin(t * 9 + i * 1.7)
                 bar_h = 3 + (H - 12) * min(1.0, lv * 1.4) * (0.45 + 0.55 * centre_weight) * wobble

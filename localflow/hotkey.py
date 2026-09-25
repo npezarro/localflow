@@ -166,6 +166,15 @@ def key_name(key):
     return None
 
 
+def win_vk_name(vk):
+    """Windows virtual-key -> our name, for keys that can end a one-shot hotkey."""
+    if 0x41 <= vk <= 0x5A or 0x30 <= vk <= 0x39:
+        return chr(vk).lower()
+    if 0x70 <= vk <= 0x87:
+        return "f%d" % (vk - 0x6F)
+    return {0x20: "space", 0x0D: "enter", 0x09: "tab", 0x1B: "esc"}.get(vk)
+
+
 class HotkeyListener:
     """Runs the pynput listener and dispatches to the dictation machine + one-shot hotkeys."""
 
@@ -178,6 +187,8 @@ class HotkeyListener:
         self._listener = None
         self._oneshot_fired = set()
         self._capture = None  # (callback, keys seen) while the user records a new hotkey
+        self._swallowed = set()  # keys of a fired one-shot hotkey, kept out of the focused app
+        self._mac_swallow = False
 
     def capture_next(self, callback):
         """Record the next chord the user presses; callback(combo_text) once all keys are up."""
@@ -210,6 +221,23 @@ class HotkeyListener:
     def _win_filter(self, msg, data):
         if data.dwExtraInfo == 0x4C46:  # typed by LocalFlow itself (typer.TAG): not the user
             return False
+        injected = bool(data.flags & 0x10)
+        name = win_vk_name(data.vkCode)
+        if name and not self._capture and (ACCEPT_INJECTED or not injected):
+            down = msg in (0x0100, 0x0104)
+            if down:
+                candidate = set(self.machine.pressed) | {name}
+                for combo, callback in self.oneshots.items():
+                    if name in combo and combo_matches(combo, candidate):
+                        if combo not in self._oneshot_fired:
+                            self._oneshot_fired.add(combo)
+                            callback()
+                        self._swallowed.add(data.vkCode)  # e.g. the Space of Ctrl+Shift+Space
+                        self._listener.suppress_event()
+            elif data.vkCode in self._swallowed:
+                self._swallowed.discard(data.vkCode)
+                self._oneshot_fired.clear()
+                self._listener.suppress_event()
         if data.vkCode == self.WIN_SPACE_VK and self.machine.lock_key == "space":
             if self.machine.wants_suppress("space") and (ACCEPT_INJECTED or not data.flags & 0x10):  # 0x10 = injected
                 if msg in (0x0100, 0x0104):  # key down
@@ -226,6 +254,13 @@ class HotkeyListener:
             import Quartz
 
             code = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
+            if event_type == Quartz.kCGEventKeyDown and self._mac_swallow:
+                self._mac_swallow = False  # a one-shot hotkey just fired on this key
+                self._swallowed.add(code)
+                return None
+            if event_type == Quartz.kCGEventKeyUp and code in self._swallowed:
+                self._swallowed.discard(code)
+                return None
             if code == self.MAC_SPACE_KEYCODE and self.machine.lock_key == "space" \
                     and self.machine.wants_suppress("space"):
                 return None
@@ -251,6 +286,8 @@ class HotkeyListener:
             if combo_matches(combo, self.machine.pressed) and combo not in self._oneshot_fired:
                 self._oneshot_fired.add(combo)
                 callback()
+                if name in combo and name not in SIDED and not name.endswith(("_l", "_r")):
+                    self._mac_swallow = True  # macOS: keep the final key out of the app
 
     def _on_release(self, key, injected=False):
         if DEBUG_KEYS:

@@ -32,6 +32,11 @@ BOOLS = [("auto_paste", "Paste into the focused app"),
 FLOATS = {"release_tail": "Keep listening after release", "preroll": "Keep before press"}
 
 
+TYPE_INTO = [("all", "All apps"), ("only", "Only the apps listed below"),
+             ("except", "All apps except those listed below")]
+INTS = {"live_auto_pause_min": ("Auto-pause after silence", 0, 120)}
+
+
 def _label_for(pairs, key):
     return next((label for k, label in pairs if k == key), pairs[0][1])
 
@@ -158,6 +163,16 @@ class SettingsPanel:
         ttk.Button(f, text="Record…", command=lambda: self.app.capture_hotkey(self.vars["live_hotkey"])).pack(
             side="left", padx=4)
         self._row(s, "Toggle live typing", f)
+        f = ttk.Frame(s)
+        ttk.Entry(f, textvariable=self._var("live_pause_hotkey"), width=22).pack(side="left", fill="x", expand=True)
+        ttk.Button(f, text="Record…",
+                   command=lambda: self.app.capture_hotkey(self.vars["live_pause_hotkey"])).pack(side="left", padx=4)
+        self._row(s, "Always-on live listening", f,
+                  "Press to start listening; words keep flowing into whatever field is focused "
+                  "(even as you switch apps) until you press it again to pause. No need to hold anything.")
+        self._row(s, "Auto-pause after silence",
+                  ttk.Spinbox(s, from_=0, to=120, increment=1, width=6, textvariable=self._var("live_auto_pause_min")),
+                  "Minutes of silence before always-on listening pauses itself (0 = never).")
         self._row(s, "Keep listening after release",
                   ttk.Spinbox(s, from_=0.0, to=3.0, increment=0.1, width=6, format="%.1f",
                               textvariable=self._var("release_tail")),
@@ -243,6 +258,22 @@ class SettingsPanel:
                   foreground=MUTED).grid(row=s._row, column=1, sticky="w")
         s._row += 1
 
+        s = self._section("Apps")
+        self._row(s, "Type into", self._combo(s, "type_into", [lbl for _k, lbl in TYPE_INTO], 34),
+                  "Applies to pasting and live typing. When the focused app isn't allowed, the text is "
+                  "copied to the clipboard and saved in Transcripts instead.")
+        self.apps_text = self._text(s, 4)
+        self._row(s, "Apps", self.apps_text,
+                  "One per line: the program name (chrome, slack, code, notepad), or on a Mac the app "
+                  "name (Google Chrome, Slack) or bundle id.")
+        f = ttk.Frame(s)
+        self.seen_var = tk.StringVar()
+        self.seen_combo = ttk.Combobox(f, textvariable=self.seen_var, width=30, state="readonly",
+                                       postcommand=self._refresh_seen)
+        self.seen_combo.pack(side="left")
+        ttk.Button(f, text="Add", command=self._add_seen).pack(side="left", padx=4)
+        self._row(s, "Apps you've dictated into", f)
+
         s = self._section("Output")
         for key, label in BOOLS:
             ttk.Checkbutton(s, text=label, variable=self._var(key, tk.BooleanVar)).grid(
@@ -280,6 +311,21 @@ class SettingsPanel:
         self.dirty = True
         self.dirty_var.set("● Unsaved changes")
         self.dirty_label.configure(foreground="#c77700")
+
+    def _refresh_seen(self):
+        from . import apps
+
+        self.seen_combo.configure(values=apps.seen_apps() or ["(dictate into an app first)"])
+
+    def _add_seen(self):
+        name = self.seen_var.get()
+        if not name or name.startswith("("):
+            return
+        current = [a.strip().lower() for a in self.apps_text.get("1.0", "end").splitlines()]
+        if name.lower() not in current:
+            text = self.apps_text.get("1.0", "end").rstrip("\n")
+            self.apps_text.delete("1.0", "end")
+            self.apps_text.insert("1.0", (text + "\n" if text else "") + name)
 
     def refresh_learned(self):
         self._learned_rows = self.app.learner.entries()
@@ -322,6 +368,8 @@ class SettingsPanel:
                     var.set(_label_for(ENGINES, cfg["engine"]))
                 elif key == "polish":
                     var.set(_label_for(POLISH, cfg["polish"]))
+                elif key == "type_into":
+                    var.set(_label_for(TYPE_INTO, cfg["type_into"]))
                 elif key == "input_device":
                     var.set(next((n for i, n in self.app.devices if i == cfg["input_device"]),
                                  self.device_names[0]))
@@ -334,7 +382,8 @@ class SettingsPanel:
             for widget, value in ((self.vocab_text, "\n".join(cfg["vocabulary"])),
                                   (self.repl_text, "\n".join("%s => %s" % (k, v.replace("\n", "\\n"))
                                                              for k, v in cfg["replacements"].items())),
-                                  (self.prompt_text, cfg["polish_prompt"])):
+                                  (self.prompt_text, cfg["polish_prompt"]),
+                                  (self.apps_text, "\n".join(cfg["app_list"]))):
                 widget.delete("1.0", "end")
                 widget.insert("1.0", value)
                 widget.edit_modified(False)
@@ -346,7 +395,7 @@ class SettingsPanel:
     def collect(self):
         """Form -> new config dict. Raises ValueError with a user-facing message."""
         new = dict(self.app.cfg)
-        for key in ("hotkey", "paste_last_hotkey", "live_hotkey"):
+        for key in ("hotkey", "paste_last_hotkey", "live_hotkey", "live_pause_hotkey"):
             value = self.vars[key].get().strip().lower()
             try:
                 hotkey.parse_combo(value)
@@ -354,12 +403,20 @@ class SettingsPanel:
                 raise ValueError("The %s can't be empty." % key.replace("_", " "))
             new[key] = value
         for key, var in self.vars.items():
-            if key in ("hotkey", "paste_last_hotkey", "live_hotkey"):
+            if key in ("hotkey", "paste_last_hotkey", "live_hotkey", "live_pause_hotkey"):
                 continue
             if key == "engine":
                 new[key] = _key_for(ENGINES, var.get())
             elif key == "polish":
                 new[key] = _key_for(POLISH, var.get())
+            elif key == "type_into":
+                new[key] = _key_for(TYPE_INTO, var.get())
+            elif key in INTS:
+                label, lo, hi = INTS[key]
+                try:
+                    new[key] = max(lo, min(hi, int(float(var.get()))))
+                except ValueError:
+                    raise ValueError("%s must be a whole number." % label)
             elif key == "input_device":
                 new[key] = next((i for i, n in self.app.devices if n == var.get()), None)
             elif isinstance(var, tk.BooleanVar):
@@ -383,6 +440,9 @@ class SettingsPanel:
                     repl[spoken.strip()] = written.strip().replace("\\n", "\n")
         new["replacements"] = repl
         new["polish_prompt"] = self.prompt_text.get("1.0", "end").strip()
+        new["app_list"] = [a.strip() for a in self.apps_text.get("1.0", "end").splitlines() if a.strip()]
+        if new["type_into"] == "only" and not new["app_list"]:
+            raise ValueError("Add at least one app, or choose \"All apps\".")
         return new
 
     def save(self):
@@ -395,6 +455,8 @@ class SettingsPanel:
             if var.get().strip() != keystore.get(key):
                 keystore.set(key, var.get())
         self.app.apply_settings(new)
+        for widget in (self.vocab_text, self.repl_text, self.prompt_text, self.apps_text):
+            widget.edit_modified(False)  # a "modified" event still in the queue must not re-dirty
         self._clean("Saved")
         return True
 

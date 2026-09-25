@@ -41,12 +41,15 @@ Open `LocalFlow.app`. macOS will ask for three permissions; grant each, then qui
 | Cancel | `Esc` | `Esc` |
 | Paste last transcript again | `Alt` + `Shift` + `Z` | `Option` + `Shift` + `Z` |
 | Turn live typing on/off | `Alt` + `Shift` + `L` | `Option` + `Shift` + `L` |
+| Start / pause always-on live listening | `Ctrl` + `Shift` + `Space` | `Control` + `Shift` + `Space` |
 
 ### Live typing
 
 With live typing on, words appear in whatever text field you're using while you're still talking, instead of all at once when you let go. Turn it on with the checkbox in *Settings → Dictation*, the tray menu, or `Alt`+`Shift`+`L`; the pill shows a **LIVE** badge while it's on.
 
 How it works: about once a second LocalFlow re-transcribes the part of the recording that isn't final yet and types only the words two passes in a row agree on, so what's typed never has to be deleted and rewritten. Text runs roughly one to two seconds behind your voice, and the last few words are typed when you stop. Words go in as keystrokes, so your clipboard isn't touched; if you're holding the hotkey, LocalFlow briefly releases it for each burst so held Ctrl/Alt/Win don't turn letters into shortcuts.
+
+**Always-on live listening.** Press `Ctrl`+`Shift`+`Space` and LocalFlow keeps listening with nothing held down: words flow into whatever text field is focused (switch apps and they follow you) and each sentence lands as soon as you pause. Press it again to pause, and again to resume; the pill shows a red dot and **LIVE** while it's listening. Silence is skipped rather than transcribed, audio that's already been typed is discarded as you go so long sessions stay light, and after 5 minutes of silence it pauses itself (*Settings → Dictation → Auto-pause after silence*; 0 = never). Each session is saved to Transcripts when you pause. The hotkey's own keystroke is swallowed, so it never types a space into your document.
 
 Trade-offs: live typing uses the local model (so it works offline, but not with the online engine) and AI clean-up doesn't apply, because text that's already typed isn't rewritten. `Esc` stops a live dictation but leaves the words already typed.
 
@@ -87,6 +90,7 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 
   If clean-up fails during dictation, the plain transcript is pasted, the pill says so, and after two failures in a row clean-up pauses until you fix it, so a broken setup never adds a delay to every dictation.
 - **API keys:** stored in the Windows Credential Manager / macOS Keychain, not in the data folder.
+- **Apps:** *Type into* **All apps** (default), **Only the apps listed**, or **All apps except those listed**, for both pasting and live typing. List programs one per line (`chrome`, `slack`, `code`, `notepad`; on a Mac the app name like `Google Chrome` or its bundle id). *Apps you've dictated into* offers the ones you've actually used so you don't have to guess names. When the focused app isn't allowed, the text is copied to the clipboard and saved in Transcripts instead, and the pill says so.
 - **Output:** paste into the focused app, restore the previous clipboard, remove filler words, trailing space, sounds, keep the last recording for troubleshooting.
 - **Words:** vocabulary (names and jargon to spell your way; this is the single biggest accuracy win for names) and replacements (`spoken => written`, e.g. `new line => \n`).
 

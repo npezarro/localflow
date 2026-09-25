@@ -29,3 +29,10 @@
 ## 2026-09-24 v0.5.0
 - Learning (localflow/learn.py, data/learned.json): corrections in Transcripts -> word-diff replacements + vocabulary; uncommon words (multi-token in Whisper's tokenizer) promoted after 3 dictations; merged into each dictation via App._run_cfg (user entries win); Settings list with forget/forget-all/off switch.
 - Verified: real model, one correction turns "Kabir nets" into "Kubernetes" on the next pass, and the vocabulary hint alone still fixes it; Windows real-app UI run (edit -> Save correction -> learned list -> forget); tests 35 pass (+1 Windows-only).
+
+## 2026-09-25 v0.6.0
+- Always-on live listening (live_pause_hotkey, default Ctrl+Shift+Space; tray item): continuous LiveSession with Silero VAD pause-flush (1.2 s), silence skipping, once-per-pause flush, loop/clause-repeat guard, low-confidence trailing-word trim, Recorder.trim_before + peek offsets, auto-pause after N min silence.
+- Per-app typing control (localflow/apps.py): all / only / except + seen-apps picker; applies to paste, paste-last and live typing; blocked -> clipboard + history + pill notice.
+- One-shot hotkeys now swallow their final key (Windows hook filter, macOS intercept); LocalFlow's own SendInput events are tagged (dwExtraInfo) and ignored by its listener.
+- Benchmarks (base.en, 16 randomized pass timings over 2 recordings): no lost or duplicated words; remaining error is an occasional "ask"->"asked" substitution on partial audio. Windows E2E: start hotkey typed nothing, word-perfect session, pause/resume, auto-pause, allow-list blocks typing, settings save/validation.
+- Not verified: Mac continuous mode / CGEvent intercept on hardware; very long (>10 min) real-mic sessions.

@@ -16,6 +16,12 @@ DEFAULTS = {
     # Live typing: words are typed into the focused app while you speak
     "live_typing": False,
     "live_hotkey": "alt+shift+l",  # toggles live typing on/off
+    # Continuous live mode: this hotkey starts/pauses always-on listening that types as you talk
+    "live_pause_hotkey": "ctrl+shift+space",
+    "live_auto_pause_min": 5,  # pause continuous mode after this many minutes of silence (0 = never)
+    # Which apps LocalFlow may type/paste into: "all", "only" (app_list) or "except" (app_list)
+    "type_into": "all",
+    "app_list": [],
     # Transcription engine: "local" (Whisper on this machine) or "cloud" (OpenAI-compatible API)
     "engine": "local",
     "model": "base.en",
