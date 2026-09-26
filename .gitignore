@@ -7,3 +7,7 @@ pkg/
 data/
 *.zip
 .pytest_cache/
+
+# internal working notes (kept locally, not published)
+context.md
+progress.md

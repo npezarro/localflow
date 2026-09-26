@@ -9,8 +9,8 @@ def test_remove_fillers():
 
 
 def test_replacements():
-    assert apply_replacements("Email me at my email.", {"my email": "nick@example.com"}) == \
-        "Email me at nick@example.com"
+    assert apply_replacements("Email me at my email.", {"my email": "me@example.com"}) == \
+        "Email me at me@example.com"
     assert apply_replacements("Hello new line world", {"new line": "\\n"}) == "Hello\nworld"
 
 

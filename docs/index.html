@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalFlow: private push-to-talk dictation</title>
+<meta name="description" content="Hold a hotkey, talk, and your words are typed into any app. Speech recognition runs on your computer. Free for Windows and Mac.">
+<link rel="icon" href="icon.png">
+<style>
+  :root { --bg:#f7f7fb; --fg:#15161a; --muted:#5d6070; --card:#fff; --line:#e3e4ec; --accent:#5b5ce6; --accent-fg:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111216; --fg:#eeeef3; --muted:#9a9cab; --card:#1a1b21; --line:#2b2d36; --accent:#8fa2ff; --accent-fg:#111216; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:48px 16px 64px; }
+  header { display:flex; gap:18px; align-items:center; }
+  header img { width:72px; height:72px; }
+  h1 { font-size:2rem; margin:0; }
+  .tag { color:var(--muted); margin:4px 0 0; }
+  .hero { margin:28px 0; font-size:1.1rem; }
+  .downloads { display:grid; gap:12px; }
+  a.dl { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 18px; background:var(--card); border:1px solid var(--line); border-radius:12px; color:var(--fg); text-decoration:none; }
+  a.dl:hover { border-color:var(--accent); }
+  a.dl.primary { background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+  a.dl small { opacity:.75; }
+  .alt { margin:10px 2px 0; color:var(--muted); font-size:.92rem; }
+  .alt a { color:inherit; }
+  h2 { margin-top:40px; font-size:1.2rem; }
+  ul { padding-left:20px; }
+  li { margin:6px 0; }
+  .note { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 18px; color:var(--muted); font-size:.95rem; }
+  footer { margin-top:40px; color:var(--muted); font-size:.9rem; }
+  footer a { color:inherit; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" alt="">
+    <div>
+      <h1>LocalFlow</h1>
+      <p class="tag">Private push-to-talk dictation for Windows and Mac</p>
+    </div>
+  </header>
+
+  <p class="hero">Hold a hotkey, talk, let go: your words are typed into whatever app you're using. Speech recognition runs on your own computer, with no account and nothing sent to the cloud unless you choose to.</p>
+
+  <div class="downloads" id="downloads">
+    <a class="dl" data-os="win" href="https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-Setup-x64.exe"><span>Download for Windows</span><small>Installer · Windows 10/11 x64</small></a>
+    <a class="dl" data-os="mac-arm" href="https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-arm64.dmg"><span>Download for Mac (Apple Silicon)</span><small>.dmg · M1 and later</small></a>
+    <a class="dl" data-os="mac-intel" href="https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-intel.dmg"><span>Download for Mac (Intel)</span><small>.dmg</small></a>
+  </div>
+  <p class="alt">Prefer no installer? Portable zips: <a href="https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-windows-x64.zip">Windows</a> · <a href="https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-arm64.zip">Mac Apple Silicon</a> · <a href="https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-intel.zip">Mac Intel</a>. <a href="https://github.com/npezarro/localflow/releases">All releases</a>.</p>
+
+  <h2>What it does</h2>
+  <ul>
+    <li><b>Hold to talk</b>, release to paste into the focused app. Tap Space while holding for hands-free.</li>
+    <li><b>Live typing</b>: words appear as you speak, or keep it listening with one hotkey and pause it with the same key.</li>
+    <li><b>Learns your words</b>: fix a transcript once and it spells that name or term right from then on.</li>
+    <li><b>Transcript history</b> and clipboard, custom vocabulary and replacements, per-app control of where it types.</li>
+    <li>Optional <b>AI clean-up</b> using your existing Claude or ChatGPT subscription, and optional online transcription (Groq, OpenAI).</li>
+  </ul>
+
+  <h2>First launch</h2>
+  <div class="note">
+    LocalFlow isn't code-signed yet, so your system will warn you once.<br>
+    <b>Windows:</b> if SmartScreen appears, click <i>More info → Run anyway</i>.<br>
+    <b>Mac:</b> drag it to Applications, open it, then go to <i>System Settings → Privacy &amp; Security</i> and click <i>Open Anyway</i>. Allow Microphone, Accessibility and Input Monitoring when asked.
+  </div>
+
+  <footer>Free and open source (MIT). <a href="https://github.com/npezarro/localflow">Source, docs and issues on GitHub</a>.</footer>
+</main>
+<script>
+  // Put the download that matches this computer first.
+  (function () {
+    var ua = navigator.userAgent, os = null;
+    if (/Windows/i.test(ua)) os = "win";
+    else if (/Macintosh|Mac OS X/i.test(ua)) {
+      os = "mac-arm";
+      try {
+        var c = document.createElement("canvas").getContext("webgl");
+        var r = c && c.getExtension("WEBGL_debug_renderer_info");
+        var gpu = r ? c.getParameter(r.UNMASKED_RENDERER_WEBGL) : "";
+        if (/Intel/i.test(gpu)) os = "mac-intel";
+      } catch (e) {}
+    }
+    if (!os) return;
+    var list = document.getElementById("downloads");
+    var match = list.querySelector('[data-os="' + os + '"]');
+    if (match) { match.classList.add("primary"); list.insertBefore(match, list.firstChild); }
+  })();
+</script>
+</body>
+</html>

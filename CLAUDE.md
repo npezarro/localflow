@@ -11,7 +11,10 @@ Python 3.12, faster-whisper (CTranslate2, CPU int8), pynput hotkeys, sounddevice
 - `localflow/selftest.py` headless check CI runs against each packaged app
 
 ## Rules
-- Can't build Mac/Windows binaries from WSL: CI (`.github/workflows/build.yml`) builds + selftests all three zips. Tag `v*` to publish a release.
+- Public repo (MIT). Keep working notes (context.md / progress.md) untracked: they're gitignored. No personal/infra details in code, tests, docs or commit messages.
+- Can't build Mac/Windows binaries from WSL: CI (`.github/workflows/build.yml`) builds + tests 3 portable zips, the Windows installer (`installer/localflow.iss`, Inno Setup) and 2 dmgs. Tag `v*` to publish a release; README download links use `releases/latest/download/<fixed name>`, so keep asset names stable.
+- Portable vs installed is decided by `paths.data_dir()`: a `data` folder next to the app = portable (zips ship one); otherwise per-user folder. Don't create `data` from an installed copy.
+- Icon: `python scripts/make_icon.py` regenerates `assets/icon.png` + `.ico`; CI builds the `.icns`.
 - `onnxruntime` is pinned to 1.23.2 on macOS: later versions dropped Intel mac wheels.
 - `LOCALFLOW_FAKE_MIC=<wav>` feeds a WAV instead of the mic (E2E testing); `LOCALFLOW_DATA_DIR` overrides the data folder.
 - Tests: `python -m pytest -q` (test_selftest downloads tiny.en on first run).

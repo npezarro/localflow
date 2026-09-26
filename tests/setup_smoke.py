@@ -80,7 +80,7 @@ def run(a):
     # 3. Groq with an obviously bad key -> clear failure, Use stays disabled
     a.open_setup(preselect="groq")
     d = a.setup_dialog
-    d.key_var.set("gsk_invalid_key_for_test")
+    d.key_var.set("not-a-real-key")
     d.check()
     wait_until(a, lambda: str(d.check_btn.cget("state")) == "normal", 30)
     results["groq_bad_key_report"] = d.status.get("1.0", "end").strip()[:200]

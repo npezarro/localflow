@@ -2,7 +2,7 @@ import pytest
 
 from localflow import learn
 
-UNCOMMON = {"priya", "kubernetes", "figma", "pezant"}
+UNCOMMON = {"priya", "kubernetes", "figma", "zorblax"}
 
 
 def uncommon(word):
@@ -46,12 +46,12 @@ def test_apply_to_merges_but_user_entries_win(learner):
 
 def test_forget_is_sticky_and_state_persists(learner, tmp_path):
     for _ in range(3):
-        learner.observe("Pezant rocks", uncommon)
-    assert learner.vocabulary() == ["Pezant"]
-    learner.remove("term", "pezant")
-    learner.observe("Pezant again", uncommon)
+        learner.observe("Zorblax rocks", uncommon)
+    assert learner.vocabulary() == ["Zorblax"]
+    learner.remove("term", "zorblax")
+    learner.observe("Zorblax again", uncommon)
     assert learner.vocabulary() == []  # removed terms don't come back by repetition
     again = learn.Learner()  # reload from data/learned.json
-    assert again.vocabulary() == [] and "pezant" in again.data["terms"]
+    assert again.vocabulary() == [] and "zorblax" in again.data["terms"]
     again.clear()
     assert learn.Learner().entries() == []

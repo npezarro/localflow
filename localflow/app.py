@@ -58,6 +58,13 @@ class App:
         self.root.geometry("780x640")
         self.root.minsize(560, 420)
         self.paster = output.Paster()  # after Tk: both must be created on the main thread
+        icon_path = os.path.join(paths.bundle_dir(), "assets", "icon.png")
+        if os.path.exists(icon_path) and not IS_MAC:  # macOS uses the .app bundle's icon
+            try:
+                self._icon = tk.PhotoImage(file=icon_path).subsample(16)
+                self.root.iconphoto(True, self._icon)
+            except tk.TclError:
+                pass
 
         self._build_ui()
         self._build_overlay()
@@ -182,11 +189,12 @@ class App:
             log.info("pystray unavailable; closing the window will minimise instead")
             self.tray = None
             return
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        d.ellipse((4, 4, 60, 60), fill=(124, 140, 255, 255))
-        d.rounded_rectangle((24, 14, 40, 40), radius=8, fill="white")
-        d.rectangle((30, 42, 34, 50), fill="white")
+        icon_path = os.path.join(paths.bundle_dir(), "assets", "icon.png")
+        if os.path.exists(icon_path):
+            img = Image.open(icon_path).resize((64, 64))
+        else:
+            img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+            ImageDraw.Draw(img).ellipse((4, 4, 60, 60), fill=(124, 140, 255, 255))
         menu = pystray.Menu(
             pystray.MenuItem("Show LocalFlow", lambda: self.ui_q.put(("show",)), default=True),
             pystray.MenuItem("Paste last transcript", lambda: self.ctl_q.put(("paste_last",))),

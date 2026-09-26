@@ -13,6 +13,7 @@ IS_WIN = sys.platform == "win32"
 
 datas = collect_data_files("faster_whisper") + [
     ("samples/jfk.wav", "samples"),
+    ("assets/icon.png", "assets"),
     ("build/models/base.en", "models/base.en"),
 ]
 binaries = collect_dynamic_libs("ctranslate2") + collect_dynamic_libs("onnxruntime")
@@ -40,6 +41,7 @@ exe = EXE(
     name="LocalFlow",
     console=False,
     target_arch=None,
+    icon="assets/icon.ico" if IS_WIN else None,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="LocalFlow")
 if IS_MAC:
@@ -47,6 +49,7 @@ if IS_MAC:
         coll,
         name="LocalFlow.app",
         bundle_identifier="ca.pezant.localflow",
+        icon="build/icon.icns" if os.path.exists("build/icon.icns") else None,
         version=__version__,
         info_plist={
             "CFBundleShortVersionString": __version__,

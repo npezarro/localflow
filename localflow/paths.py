@@ -1,9 +1,11 @@
-"""Portable path resolution.
+"""Where LocalFlow keeps its files (config, history, downloaded models, log).
 
-Everything the app writes (config, history, downloaded models, log) lives in a
-``data`` folder next to the executable, so the unzipped folder is the whole
-install. If that folder is not writable (read-only media, or macOS App
-Translocation of a quarantined download) we fall back to a per-user folder.
+Portable copy (the zip): it ships with a ``data`` folder next to the app, and that
+folder's presence is what makes it portable: everything stays inside the unzipped
+folder. Installed copy (Windows installer, .dmg dragged to Applications): there is no
+``data`` folder, so files go to the per-user folder (%LOCALAPPDATA%/LocalFlow on Windows,
+~/Library/Application Support/LocalFlow). A portable folder that isn't writable
+(read-only media, macOS App Translocation) also falls back to the per-user folder.
 """
 import os
 import sys
@@ -31,6 +33,10 @@ def bundle_dir():
     if is_frozen():
         return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     return install_root()
+
+
+def is_portable():
+    return data_dir() == os.path.join(install_root(), "data")
 
 
 def is_translocated():
@@ -66,8 +72,9 @@ def data_dir():
     global _data_dir
     if _data_dir is None:
         override = os.environ.get("LOCALFLOW_DATA_DIR")
-        candidate = override or os.path.join(install_root(), "data")
-        if not override and (is_translocated() or not _writable(candidate)):
+        portable = os.path.join(install_root(), "data")
+        candidate = override or portable
+        if not override and (not os.path.isdir(portable) or is_translocated() or not _writable(portable)):
             candidate = _user_data_dir()
         os.makedirs(candidate, exist_ok=True)
         _data_dir = candidate

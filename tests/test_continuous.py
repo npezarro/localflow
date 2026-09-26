@@ -102,3 +102,23 @@ def test_repeated_clause_is_cut():
     clause = "ask not what your country can do for you".split()
     words = [(0, 0, " " + w) for w in clause + clause + ["ask"]]
     assert [w[2].strip() for w in _drop_loops(words)] == clause
+
+
+def test_data_folder_decides_portable_vs_installed(tmp_path, monkeypatch):
+    from localflow import paths
+
+    monkeypatch.delenv("LOCALFLOW_DATA_DIR", raising=False)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "user"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user"))
+    portable, installed = tmp_path / "zip" / "LocalFlow", tmp_path / "installed"
+    (portable / "data").mkdir(parents=True)
+    installed.mkdir()
+    for root, expected in ((portable, portable / "data"), (installed, None)):
+        monkeypatch.setattr(paths, "_data_dir", None)
+        monkeypatch.setattr(paths, "install_root", lambda r=root: str(r))
+        got = paths.data_dir()
+        if expected:
+            assert got == str(expected) and paths.is_portable()
+        else:
+            assert got.startswith(str(tmp_path / "user")) and not paths.is_portable()
+            assert not (installed / "data").exists()  # an installed copy never creates one

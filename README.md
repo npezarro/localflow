@@ -2,34 +2,34 @@
 
 Push-to-talk dictation for Windows and macOS that runs entirely on your machine. Hold a hotkey, talk, let go: the words are transcribed locally with Whisper (via faster-whisper) and pasted into whatever app has focus. Every transcript is also kept on the clipboard and in a searchable history.
 
-No account, no cloud, no installer. Unzip the folder and run it.
+No account and no cloud required. Download the installer, or the portable zip if you'd rather unzip and run.
 
 ## Download
 
-Grab the zip for your machine from the latest build (GitHub Actions artifacts, or the Releases page for tagged versions):
+These links always point to the newest release:
 
-| Platform | File |
-|---|---|
-| Windows 10/11 (x64) | `LocalFlow-windows-x64.zip` |
-| Mac, Apple Silicon (M1 and later) | `LocalFlow-macos-arm64.zip` |
-| Mac, Intel | `LocalFlow-macos-intel.zip` |
+| Platform | Installer (recommended) | Portable (unzip and run) |
+|---|---|---|
+| Windows 10/11 (x64) | [LocalFlow-Setup-x64.exe](https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-Setup-x64.exe) | [LocalFlow-windows-x64.zip](https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-windows-x64.zip) |
+| Mac, Apple Silicon (M1 and later) | [LocalFlow-macos-arm64.dmg](https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-arm64.dmg) | [LocalFlow-macos-arm64.zip](https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-arm64.zip) |
+| Mac, Intel | [LocalFlow-macos-intel.dmg](https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-intel.dmg) | [LocalFlow-macos-intel.zip](https://github.com/npezarro/localflow/releases/latest/download/LocalFlow-macos-intel.zip) |
 
-Each zip includes the `base.en` model, so it works offline on first launch.
+All versions and release notes: [Releases](https://github.com/npezarro/localflow/releases). Every download includes the `base.en` speech model, so it works offline from the first launch.
 
-## Run it
+**Installer vs portable:** the installer puts LocalFlow in your apps (Start menu / Applications) and keeps your settings, transcripts and models in your user folder (`%LOCALAPPDATA%\LocalFlow` or `~/Library/Application Support/LocalFlow`). The portable zip keeps everything inside the unzipped folder (in its `data` folder), so you can carry it on a USB stick or delete the folder to remove every trace.
 
-**Windows:** unzip anywhere (Desktop, a USB stick, `C:\Tools`), open the `LocalFlow` folder, double-click `LocalFlow.exe`. If SmartScreen warns about an unrecognized app, choose *More info → Run anyway* (the build is unsigned). Closing the window sends LocalFlow to the system tray; quit from the tray icon.
+## Install
 
-**macOS:** unzip, then in Terminal clear the download quarantine once (the app is not notarized):
+**Windows installer:** run `LocalFlow-Setup-x64.exe`. It installs for your account only (no administrator prompt), adds a Start menu entry, and optionally a desktop shortcut and "start when I sign in". Uninstall from *Settings → Apps* like any other app (your settings folder is kept; delete `%LOCALAPPDATA%\LocalFlow` to remove it too).
 
-```bash
-xattr -dr com.apple.quarantine ~/Downloads/LocalFlow
-```
+**Windows portable:** unzip anywhere and double-click `LocalFlow\LocalFlow.exe`.
 
-Open `LocalFlow.app`. macOS will ask for three permissions; grant each, then quit and reopen LocalFlow:
+Both are unsigned, so Windows SmartScreen may say it "protected your PC": click **More info → Run anyway**. Closing the window sends LocalFlow to the system tray; quit from the tray icon.
+
+**Mac:** open the `.dmg` and drag LocalFlow into Applications (or unzip the portable zip anywhere). LocalFlow isn't notarized by Apple, so the first launch is blocked: open *System Settings → Privacy & Security*, scroll down, and click **Open Anyway** next to LocalFlow. (Terminal alternative: `xattr -dr com.apple.quarantine /Applications/LocalFlow.app`.) Then allow the three permissions it asks for, and quit and reopen LocalFlow:
 
 1. **Microphone** (prompted on your first dictation)
-2. **Accessibility** (System Settings → Privacy & Security → Accessibility), needed to paste
+2. **Accessibility** (System Settings → Privacy & Security → Accessibility), needed to paste and type
 3. **Input Monitoring** (same pane), needed to see the hotkey
 
 ## Use it
@@ -98,9 +98,9 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 
 Neither Anthropic nor OpenAI offers speech-to-text on a subscription login. Claude's dictation only exists inside Claude Code, and ChatGPT's transcription endpoint is private and requires impersonating OpenAI's own apps, which LocalFlow deliberately doesn't do. Online transcription therefore uses an API key (Groq's free tier covers normal dictation use), while the clean-up pass can use your Claude or ChatGPT subscription through their official command-line tools.
 
-## Portable data
+## Your data
 
-Everything LocalFlow writes lives in a `data` folder next to the app:
+The installed app keeps its files in `%LOCALAPPDATA%\LocalFlow` (Windows) or `~/Library/Application Support/LocalFlow` (Mac). The portable zip keeps them in the `data` folder next to the app:
 
 ```
 LocalFlow/
@@ -113,7 +113,7 @@ LocalFlow/
     localflow.log        log for troubleshooting
 ```
 
-Move or copy the folder and everything comes with it; delete it to uninstall. If the folder is read-only (or macOS runs the app from a quarantine sandbox), LocalFlow falls back to `%LOCALAPPDATA%\LocalFlow` or `~/Library/Application Support/LocalFlow` and shows the path at the bottom of Settings.
+For the portable copy, move or copy the folder and everything comes with it; delete it to uninstall. If that folder is read-only (or macOS runs the app from its quarantine sandbox), LocalFlow falls back to the user folder above. *Settings → Open data folder* always shows where yours is.
 
 ## Compared with Wispr Flow
 
@@ -140,4 +140,10 @@ python run_localflow.py                            # run from source
 python scripts/fetch_model.py base.en && pyinstaller --noconfirm localflow.spec
 ```
 
-CI (`.github/workflows/build.yml`) builds all three zips, runs the unit tests, and runs `--selftest` against each packaged app before uploading it.
+Building has to happen on the platform you're building for (a Windows `.exe` on Windows, a Mac app on macOS). The Windows installer is made from `dist/LocalFlow` with [Inno Setup 6](https://jrsoftware.org/isinfo.php): `iscc /DAppVersion=0.7.0 installer\localflow.iss`. The Mac `.dmg` is made with `hdiutil`; see the workflow for the exact steps.
+
+CI (`.github/workflows/build.yml`) does all of this on GitHub's Windows and macOS machines for every push: unit tests, the three portable zips, the Windows installer and the two disk images. It then tests each one the way a user would (runs the portable app's self-test and GUI start-up; installs, runs and uninstalls the Windows installer; mounts the `.dmg` and runs the app from it) before attaching them to a release when a `v*` tag is pushed. Forks run the same workflow with no secrets needed.
+
+## License
+
+MIT (see `LICENSE`). The builds bundle third-party components under their own licenses; see `THIRD_PARTY.md`. Contributions and bug reports are welcome via [issues](https://github.com/npezarro/localflow/issues).
