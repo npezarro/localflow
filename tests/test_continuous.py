@@ -108,8 +108,7 @@ def test_data_folder_decides_portable_vs_installed(tmp_path, monkeypatch):
     from localflow import paths
 
     monkeypatch.delenv("LOCALFLOW_DATA_DIR", raising=False)
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "user"))
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user"))
+    monkeypatch.setattr(paths, "_user_data_dir", lambda: str(tmp_path / "user" / "LocalFlow"))
     portable, installed = tmp_path / "zip" / "LocalFlow", tmp_path / "installed"
     (portable / "data").mkdir(parents=True)
     installed.mkdir()
