@@ -11,12 +11,16 @@ from tkinter import messagebox, ttk
 
 from . import __version__, apps, audio, config, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
 from .history import History
+from .dictionary import Dictionary
+from .dictionary_ui import DictionaryTab
 from .indicator import Indicator
 from .learn import Learner
 from .live import LiveSession
 from .settings_ui import SettingsPanel
 from .setup_ui import SetupDialog
 from .transcriber import Transcriber, is_local, speech_in
+from . import ui
+from .ui import px
 
 log = logging.getLogger(__name__)
 IS_MAC = sys.platform == "darwin"
@@ -31,6 +35,7 @@ class App:
         self.cfg = config.load()
         self.history = History(self.cfg["history_limit"])
         self.learner = Learner()
+        self.dictionary = Dictionary()
         self.transcriber = Transcriber()
         self.recorder = audio.Recorder(warm=self.cfg["warm_mic"])
         self.devices = [(None, "System default")]
@@ -55,8 +60,9 @@ class App:
         platform_fix.pin_macos_keyboard_layout()
         self.root = tk.Tk()
         self.root.title("LocalFlow")
-        self.root.geometry("780x640")
-        self.root.minsize(560, 420)
+        ui.init(self.root)
+        self.root.geometry("%dx%d" % (px(800), px(660)))
+        self.root.minsize(px(560), px(420))
         self.paster = output.Paster()  # after Tk: both must be created on the main thread
         icon_path = os.path.join(paths.bundle_dir(), "assets", "icon.png")
         if os.path.exists(icon_path) and not IS_MAC:  # macOS uses the .app bundle's icon
@@ -91,26 +97,35 @@ class App:
         style = ttk.Style(root)
         if "clam" in style.theme_names() and not IS_MAC:
             style.theme_use("clam")
-        top = ttk.Frame(root, padding=(14, 12, 14, 6))
+        style.configure("Treeview", rowheight=px(22))
+        # Theme elements drawn at fixed pixel sizes: scale them with the display.
+        for name in ("TCheckbutton", "TRadiobutton"):
+            style.configure(name, indicatorsize=px(12), indicatormargin=(px(2), px(2), px(6), px(2)))
+        style.configure("Vertical.TScrollbar", arrowsize=px(14))
+        style.configure("Horizontal.TScrollbar", arrowsize=px(14))
+        top = ttk.Frame(root, padding=(px(14), px(12), px(14), px(6)))
         top.pack(fill="x")
-        self.status_dot = tk.Canvas(top, width=14, height=14, highlightthickness=0)
+        self.status_dot = tk.Canvas(top, width=px(14), height=px(14), highlightthickness=0)
         self.status_dot.pack(side="left")
-        self._dot = self.status_dot.create_oval(2, 2, 12, 12, fill="#bbb", outline="")
+        self._dot = self.status_dot.create_oval(px(2), px(2), px(12), px(12), fill="#bbb", outline="")
         self.status_var = tk.StringVar(value="Starting…")
         ttk.Label(top, textvariable=self.status_var, font=("TkDefaultFont", 11, "bold")).pack(
             side="left", padx=8)
         self.hint_var = tk.StringVar()
-        ttk.Label(root, textvariable=self.hint_var, foreground="#666", padding=(36, 0, 14, 6),
-                  wraplength=640).pack(fill="x")
+        ttk.Label(root, textvariable=self.hint_var, foreground="#666", padding=(px(36), 0, px(14), px(6)),
+                  wraplength=px(640)).pack(fill="x")
 
         nb = ttk.Notebook(root)
         nb.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         hist = ttk.Frame(nb, padding=8)
         sett = ttk.Frame(nb, padding=8)
+        dic = ttk.Frame(nb, padding=8)
         nb.add(hist, text="Transcripts")
+        nb.add(dic, text="Dictionary")
         nb.add(sett, text="Settings")
         self.nb, self.settings_tab = nb, sett
         self._build_history(hist)
+        self.dictionary_tab = DictionaryTab(dic, self)
         self.settings = SettingsPanel(sett, self)
         self._current_tab = str(hist)
         self._reverting_tab = False
@@ -137,8 +152,8 @@ class App:
         self.tree = ttk.Treeview(frame, columns=("when", "text"), show="headings", selectmode="browse")
         self.tree.heading("when", text="When")
         self.tree.heading("text", text="Transcript (double-click to copy)")
-        self.tree.column("when", width=120, stretch=False)
-        self.tree.column("text", width=500)
+        self.tree.column("when", width=px(120), stretch=False)
+        self.tree.column("text", width=px(500))
         sb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -152,7 +167,7 @@ class App:
         self.detail.bind("<<Modified>>", self._detail_modified)
         self.detail_meta = tk.StringVar(value="Select a transcript. Fix any mistakes here and press "
                                               "Save correction: LocalFlow learns from it.")
-        ttk.Label(lower, textvariable=self.detail_meta, foreground="#888", wraplength=700,
+        ttk.Label(lower, textvariable=self.detail_meta, foreground="#888", wraplength=px(700),
                   justify="left").pack(fill="x", pady=(4, 0))
         pane.add(lower, weight=1)
         self.refresh_history()
@@ -402,9 +417,41 @@ class App:
         cfg = dict(self.cfg)
         if self.polish_paused:
             cfg["polish"] = "off"
+        cfg = self.dictionary.apply_to(cfg)  # words you taught by voice come first
         if cfg.get("learn"):
             cfg = self.learner.apply_to(cfg)
         return cfg
+
+    # ------------------------------------------------------------------ pronunciation dictionary
+    def hear_plain(self, samples):
+        """What the current engine hears with NO hints, vocabulary or replacements."""
+        cfg = dict(self.cfg, vocabulary=[], replacements={}, polish="off")
+        raw, _engine, _note = pipeline.transcribe(samples, cfg, self.transcriber)
+        return raw
+
+    def teach_word(self, word, samples):
+        """Store one recording of ``word``; returns (what was heard, is it right now?)."""
+        heard = self.hear_plain(samples)
+        common = lambda phrase: all(not self.transcriber.is_uncommon(w) for w in phrase.split())  # noqa: E731
+        self.dictionary.add_take(word, samples, heard, is_common=common)
+        cfg = dict(self._run_cfg(), polish="off")
+        result = pipeline.process(samples, cfg, self.transcriber)
+        return heard, word.lower() in result["text"].lower()
+
+    # ------------------------------------------------------------------ backup
+    def reload_data(self):
+        """After a restore: re-read everything from the data folder."""
+        self.cfg.clear()
+        self.cfg.update(config.load())
+        self.history = History(self.cfg["history_limit"])
+        self.learner = Learner()
+        self.dictionary.reload()
+        self.settings.load(self.cfg)
+        self.refresh_history()
+        self.dictionary_tab.refresh()
+        self.start_listener()
+        self._open_mic()
+        self._update_hint()
 
     def _learn_from(self, text):
         if not self.cfg.get("learn"):
@@ -586,6 +633,12 @@ class App:
             self.set_status(ev[1])
         elif kind == "polish_failed":
             self._polish_failed(ev[1])
+        elif kind == "call":
+            ev[1]()
+        elif kind == "dictionary_changed":
+            self.dictionary_tab.refresh(ev[1])
+            if ev[2]:
+                self.set_status(ev[2])
         elif kind == "setvar":
             self.settings.vars[ev[1]].set(ev[2])
         elif kind == "status_warn":

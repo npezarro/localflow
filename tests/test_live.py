@@ -61,7 +61,7 @@ def test_commits_only_agreed_words_and_finishes_the_rest():
 def test_keeps_fillers_when_disabled_and_applies_replacements():
     model = fake_model(noise_at_end=False)
     s = LiveSession(model, cfg(remove_fillers=False, replacements={"Tuesday": "Wednesday"}, trailing_space=False))
-    assert "".join(run(s, model, 4.0)) == "Um, so we ship it on Wednesday"  # replacements swallow a trailing "." like batch mode
+    assert "".join(run(s, model, 4.0)) == "Um, so we ship it on Wednesday."
 
 
 def test_short_audio_types_nothing_until_finish():

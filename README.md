@@ -57,6 +57,14 @@ A floating pill appears at the bottom centre of the monitor you're working on (t
 
 **Transcripts tab:** every dictation, newest first. Search, double-click to copy, delete, or clear. Select one to see it below the list; fix any mistakes there and press **Save correction** (the fixed text is also copied to the clipboard).
 
+### Teaching pronunciation (Dictionary tab)
+
+For a word LocalFlow keeps getting wrong (a name, a product, jargon), open the **Dictionary** tab, click **Add word…**, type how it should be spelled, and record yourself saying it a few times (3 seconds each; one take inside a short sentence helps). Each take is transcribed with no hints, which shows how LocalFlow actually hears you ("Kabir nets", "Cabernets"); those hearings are corrected to your spelling from then on, and the word also becomes a spelling hint, so it usually comes out right even in sentences you never recorded. Each take shows a ✓ once it's fixed.
+
+- A hearing that is an ordinary word (say "sigma" for "Figma") is **off** by default, because correcting it would change every real "sigma"; the spelling hint still applies. Select the take and click **Turn correction on/off** to change that.
+- Your recordings are kept, so after switching models or engines, **Re-check all** re-learns every word from them without re-recording. **Play take** replays one.
+- It all lives in plain files: `data/dictionary/<word>/entry.json` plus `take-1.wav`, `take-2.wav`, … (in the data folder described below).
+
 ### Learning your words
 
 LocalFlow learns how you talk, on your computer only (`data/learned.json`), from two sources:
@@ -109,9 +117,13 @@ LocalFlow/
     config.json          settings (editable by hand while LocalFlow is closed)
     history.jsonl        transcripts (with the pre-clean-up text when AI clean-up ran)
     last-recording.wav   your most recent dictation, for troubleshooting (optional)
+    learned.json         words learned from your corrections and repetition
+    dictionary/          your pronunciation dictionary (one folder per word, with recordings)
     models/              downloaded models
     localflow.log        log for troubleshooting
 ```
+
+**Back up and move it:** *Settings → Your data → Back up…* saves settings, transcripts, learned words and the dictionary (with its recordings) as one zip; **Restore…** loads such a zip into this copy, e.g. on a new computer or when switching between the portable and installed versions. Downloaded models aren't included (they re-download) and API keys stay in the system keychain, so re-enter those on a new computer. You can also just copy the data folder.
 
 For the portable copy, move or copy the folder and everything comes with it; delete it to uninstall. If that folder is read-only (or macOS runs the app from its quarantine sandbox), LocalFlow falls back to the user folder above. *Settings → Open data folder* always shows where yours is.
 

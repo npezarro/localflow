@@ -10,7 +10,8 @@ def test_remove_fillers():
 
 def test_replacements():
     assert apply_replacements("Email me at my email.", {"my email": "me@example.com"}) == \
-        "Email me at me@example.com"
+        "Email me at me@example.com."  # a word replacement keeps the sentence's period
+    assert apply_replacements("Deploy to Kabir-nets.", {"kabir nets": "Kubernetes"}) == "Deploy to Kubernetes."
     assert apply_replacements("Hello new line world", {"new line": "\\n"}) == "Hello\nworld"
 
 

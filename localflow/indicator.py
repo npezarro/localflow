@@ -8,6 +8,7 @@ import time
 import tkinter as tk
 
 from . import monitors, platform_fix
+from .ui import px
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
@@ -16,8 +17,8 @@ KEY = "#010203"  # colour made transparent around the pill (Windows)
 PILL, EDGE, BAR, DIM, RED, ACCENT, TEXT = ("#111216", "#34363f", "#f4f4f6", "#8b8e99", "#ff4d57",
                                             "#8fa2ff", "#e9e9ee")
 N_BARS = 13
-H = 36
-MARGIN = 18
+BASE_H = 36  # pill height in 96-dpi pixels; scaled per display at runtime
+BASE_MARGIN = 18
 
 
 class Indicator:
@@ -28,7 +29,8 @@ class Indicator:
         self.levels = [0.0] * N_BARS
         self._alpha = 0.0
         self._hide_at = None
-        self.width = 132
+        self.H, self.M = px(BASE_H), px(BASE_MARGIN)
+        self.width = px(132)
         self.live = False
 
         win = self.win = tk.Toplevel(root)
@@ -43,9 +45,9 @@ class Indicator:
                 win.attributes("-transparentcolor", KEY)
         win.configure(bg=bg)
         self._set_alpha(0.0)
-        self.canvas = tk.Canvas(win, width=260, height=H, bg=bg, highlightthickness=0, borderwidth=0)
+        self.canvas = tk.Canvas(win, width=px(260), height=self.H, bg=bg, highlightthickness=0, borderwidth=0)
         self.canvas.pack()
-        win.geometry("260x%d+-10000+-10000" % H)
+        win.geometry("%dx%d+-10000+-10000" % (px(260), self.H))
         win.update_idletasks()
         if IS_WIN:
             platform_fix.windows_no_activate(int(win.wm_frame(), 16))
@@ -91,6 +93,9 @@ class Indicator:
             pass
 
     def _width_for(self, mode, text):
+        return px(self._base_width(mode, text))
+
+    def _base_width(self, mode, text):
         if mode == "continuous":
             return 176
         extra = 38 if self.live and mode in ("listening", "locked") else 0
@@ -99,16 +104,17 @@ class Indicator:
         if mode == "listening":
             return 132 + extra
         if mode == "message":
-            return min(520, 40 + 7 * len(text))
+            return min(520, 40 + 7 * len(text))  # base pixels; _width_for scales
         return 132
 
     def _place(self):
         x, y, w, h = monitors.active_work_area(self.root)
-        px = x + (w - self.width) // 2
-        py = y + h - H - MARGIN
-        self.win.geometry("%dx%d+%d+%d" % (self.width, H, px, py))
+        px_ = x + (w - self.width) // 2
+        py = y + h - self.H - self.M
+        self.win.geometry("%dx%d+%d+%d" % (self.width, self.H, px_, py))
 
     def _pill(self, c, width):
+        H = self.H
         r = H // 2
         c.create_oval(0, 0, H - 1, H - 1, fill=EDGE, outline="")
         c.create_oval(width - H, 0, width - 1, H - 1, fill=EDGE, outline="")
@@ -123,25 +129,26 @@ class Indicator:
         width = self.width
         c.configure(width=width)
         self._pill(c, width)
+        H = self.H
         mid = H / 2
         if self.mode == "message":
             c.create_text(width / 2, mid, text=self.text, fill=TEXT, font=("TkDefaultFont", 10))
             return
-        left = 20
+        left = px(20)
         if self.mode == "locked":
-            c.create_oval(14, mid - 4, 22, mid + 4, fill=RED, outline="")
-            c.create_text(width - 14, mid, text="hands-free", anchor="e", fill=DIM,
+            c.create_oval(px(14), mid - px(4), px(22), mid + px(4), fill=RED, outline="")
+            c.create_text(width - px(14), mid, text="hands-free", anchor="e", fill=DIM,
                           font=("TkDefaultFont", 8))
-            left = 30
+            left = px(30)
         if self.mode == "continuous":  # always-on live listening
-            c.create_oval(14, mid - 4, 22, mid + 4, fill=RED, outline="")
-            c.create_text(width - 14, mid, text="LIVE", anchor="e", fill=ACCENT,
+            c.create_oval(px(14), mid - px(4), px(22), mid + px(4), fill=RED, outline="")
+            c.create_text(width - px(14), mid, text="LIVE", anchor="e", fill=ACCENT,
                           font=("TkDefaultFont", 8, "bold"))
-            left = 30
-        right = 84 if self.mode == "locked" else 50 if self.mode == "continuous" else 20
+            left = px(30)
+        right = px(84) if self.mode == "locked" else px(50) if self.mode == "continuous" else px(20)
         if self.live and self.mode in ("listening", "locked"):
-            right += 38
-            c.create_text(width - (84 if self.mode == "locked" else 16), mid, text="LIVE", anchor="e",
+            right += px(38)
+            c.create_text(width - (px(84) if self.mode == "locked" else px(16)), mid, text="LIVE", anchor="e",
                           fill=ACCENT, font=("TkDefaultFont", 8, "bold"))
         span = (width - left - right)
         step = span / N_BARS
@@ -151,10 +158,10 @@ class Indicator:
             if self.mode in ("listening", "locked", "continuous"):
                 lv = self.levels[-1 - abs(i - N_BARS // 2)]  # recent level radiates from the centre
                 wobble = 0.75 + 0.25 * math.sin(t * 9 + i * 1.7)
-                bar_h = 3 + (H - 12) * min(1.0, lv * 1.4) * (0.45 + 0.55 * centre_weight) * wobble
+                bar_h = px(3) + (H - px(12)) * min(1.0, lv * 1.4) * (0.45 + 0.55 * centre_weight) * wobble
                 colour = BAR
             else:  # busy / polish: travelling wave
-                bar_h = 3 + 9 * (0.5 + 0.5 * math.sin(t * 7 - i * 0.6)) * (0.5 + 0.5 * centre_weight)
+                bar_h = px(3) + px(9) * (0.5 + 0.5 * math.sin(t * 7 - i * 0.6)) * (0.5 + 0.5 * centre_weight)
                 colour = ACCENT if self.mode == "polish" else DIM
             x = left + i * step + step / 2
-            c.create_line(x, mid - bar_h / 2, x, mid + bar_h / 2, fill=colour, width=3, capstyle="round")
+            c.create_line(x, mid - bar_h / 2, x, mid + bar_h / 2, fill=colour, width=px(3), capstyle="round")

@@ -7,6 +7,8 @@ import tkinter as tk
 import webbrowser
 from tkinter import messagebox, ttk
 
+from .ui import px
+
 from . import cloud, config, hotkey, keystore, paths
 
 IS_MAC = sys.platform == "darwin"
@@ -108,7 +110,7 @@ class SettingsPanel:
         widget.grid(row=frame._row, column=1, sticky="ew", pady=3)
         if note:
             frame._row += 1
-            ttk.Label(frame, text=note, foreground=MUTED, wraplength=520, justify="left").grid(
+            ttk.Label(frame, text=note, foreground=MUTED, wraplength=px(520), justify="left").grid(
                 row=frame._row, column=1, sticky="w")
         frame._row += 1
 
@@ -153,7 +155,7 @@ class SettingsPanel:
         ttk.Checkbutton(s, text="Live typing: type words into the focused app while you speak",
                         variable=self._var("live_typing", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
         s._row += 1
-        ttk.Label(s, foreground=MUTED, wraplength=520, justify="left",
+        ttk.Label(s, foreground=MUTED, wraplength=px(520), justify="left",
                   text="Words appear about 1-2 s behind your voice and are typed as keystrokes (the "
                        "clipboard is left alone). Uses the local model; AI clean-up doesn't apply, "
                        "because typed text isn't rewritten afterwards.").grid(row=s._row, column=1, sticky="w")
@@ -276,6 +278,19 @@ class SettingsPanel:
         self.seen_combo.pack(side="left")
         ttk.Button(f, text="Add", command=self._add_seen).pack(side="left", padx=4)
         self._row(s, "Apps you've dictated into", f)
+
+        s = self._section("Your data")
+        ttk.Label(s, foreground=MUTED, wraplength=px(560), justify="left",
+                  text="Settings, transcripts, learned words and your pronunciation dictionary (with its "
+                       "recordings) are plain files in the data folder. Back up saves them as one zip you "
+                       "can restore on another computer or install. Downloaded models re-download; API "
+                       "keys stay in the system keychain.").grid(row=s._row, column=0, columnspan=2, sticky="w")
+        s._row += 1
+        f = ttk.Frame(s)
+        ttk.Button(f, text="Back up…", command=self.backup).pack(side="left")
+        ttk.Button(f, text="Restore…", command=self.restore).pack(side="left", padx=6)
+        ttk.Button(f, text="Open data folder", command=self.open_data).pack(side="left")
+        self._row(s, "", f)
 
         s = self._section("Output")
         for key, label in BOOLS:
@@ -477,6 +492,40 @@ class SettingsPanel:
             return self.save()
         self.revert()
         return True
+
+    def backup(self):
+        import time as _time
+        from tkinter import filedialog
+
+        from . import backup
+
+        dest = filedialog.asksaveasfilename(
+            title="Back up LocalFlow", defaultextension=".zip", filetypes=[("Zip", "*.zip")],
+            initialfile="LocalFlow-backup-%s.zip" % _time.strftime("%Y-%m-%d"))
+        if not dest:
+            return
+        try:
+            count = backup.export(dest)
+            self.app.set_status("Backed up %d files to %s" % (count, dest))
+        except Exception as exc:
+            messagebox.showerror("LocalFlow", "Backup failed: %s" % exc)
+
+    def restore(self):
+        from tkinter import filedialog
+
+        from . import backup
+
+        src = filedialog.askopenfilename(title="Restore a LocalFlow backup", filetypes=[("Zip", "*.zip")])
+        if not src or not messagebox.askyesno(
+                "LocalFlow", "Replace your current settings, transcripts, learned words and dictionary "
+                             "with this backup?"):
+            return
+        try:
+            restored = backup.restore(src)
+            self.app.reload_data()
+            self.app.set_status("Restored: " + ", ".join(restored))
+        except Exception as exc:
+            messagebox.showerror("LocalFlow", "Restore failed: %s" % exc)
 
     def open_data(self):
         path = paths.data_dir()

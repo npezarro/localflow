@@ -24,7 +24,12 @@ def apply_replacements(text, replacements):
         if not spoken:
             continue
         written = written.replace("\\n", "\n")
-        pattern = re.compile(r"(?i)(?<!\w)" + re.escape(spoken) + r"(?!\w)[.,]?")
+        # Spaces in the spoken phrase also match hyphens ("kabir nets" ~ "Kabir-nets").
+        body = re.escape(spoken.strip()).replace(r"\ ", r"[\s-]+")
+        if written.strip() == "":  # a spoken command ("new line"): swallow the dictated period
+            pattern = re.compile(r"(?i)(?<!\w)" + body + r"(?!\w)[.,]?")
+        else:  # a word: keep the sentence's punctuation
+            pattern = re.compile(r"(?i)(?<!\w)" + body + r"(?!\w)")
         text = pattern.sub(lambda _m: written, text)
     return re.sub(r"[ \t]*\n[ \t]*", "\n", text)
 

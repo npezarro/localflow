@@ -8,6 +8,8 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk
 
+from .ui import px
+
 from . import cloud, keystore, polish
 
 MUTED = "#6b6f78"
@@ -45,10 +47,10 @@ class SetupDialog:
         body = ttk.Frame(win, padding=16)
         body.pack(fill="both", expand=True)
         if reason:
-            ttk.Label(body, text=reason, foreground=BAD, wraplength=520, justify="left").pack(anchor="w",
+            ttk.Label(body, text=reason, foreground=BAD, wraplength=px(520), justify="left").pack(anchor="w",
                                                                                          pady=(0, 8))
         ttk.Label(body, text="AI clean-up (optional)", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
-        ttk.Label(body, wraplength=520, justify="left", foreground=MUTED,
+        ttk.Label(body, wraplength=px(520), justify="left", foreground=MUTED,
                   text="Transcription already runs on this computer with no account. Clean-up is an "
                        "extra pass that fixes punctuation, removes false starts and applies "
                        "corrections (\"Tuesday, actually Wednesday\" becomes \"Wednesday\"). It uses "
@@ -62,7 +64,7 @@ class SetupDialog:
             row.pack(fill="x", pady=2)
             ttk.Radiobutton(row, text=title, value=key, variable=self.choice,
                             command=self._choice_changed).pack(anchor="w")
-            ttk.Label(row, text=note, foreground=MUTED, wraplength=500).pack(anchor="w", padx=(22, 0))
+            ttk.Label(row, text=note, foreground=MUTED, wraplength=px(500)).pack(anchor="w", padx=(px(22), 0))
 
         self.key_row = ttk.Frame(body)
         ttk.Label(self.key_row, text="API key").pack(side="left")
