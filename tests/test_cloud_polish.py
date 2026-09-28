@@ -72,7 +72,7 @@ class FakeTranscriber:
         self.ready = threading.Event()
         self.ready.set()
 
-    def transcribe(self, audio, language, vocabulary, beam):
+    def transcribe(self, audio, language, vocabulary, beam, context=None):
         return "um so local text works fine"
 
 

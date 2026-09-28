@@ -15,6 +15,7 @@ Python 3.12, faster-whisper (CTranslate2, CPU int8), pynput hotkeys, sounddevice
 - Can't build Mac/Windows binaries from WSL: CI (`.github/workflows/build.yml`) builds + tests 3 portable zips, the Windows installer (`installer/localflow.iss`, Inno Setup) and 2 dmgs. Tag `v*` to publish a release; README download links use `releases/latest/download/<fixed name>`, so keep asset names stable.
 - Portable vs installed is decided by `paths.data_dir()`: a `data` folder next to the app = portable (zips ship one); otherwise per-user folder. Don't create `data` from an installed copy.
 - Icon: `python scripts/make_icon.py` regenerates `assets/icon.png` + `.ico`; CI builds the `.icns`.
+- Every local transcription goes through `chunked.transcribe_in_chunks` (<= 20 s per Whisper call; cuts at pauses, forced cut at the quietest point). This bounds the whole 30 s window-resume failure class; keep it even if the cause below is fixed upstream.
 - Transcription must keep `without_timestamps=False`: with True, Whisper skips the rest of a 30 s window when it stops early and silently drops speech from dictations over ~20 s (found 2026-09-28: 55 of 93 words).
 - GPU (`localflow/gpu.py`): only cublas64_12, cublasLt64_12, cudnn64_9 are needed (measured); they're range-read out of NVIDIA's PyPI wheels. CTranslate2 finds them via PATH, not just add_dll_directory. Without cudnn64_9 it silently runs on CPU: check `Transcriber.device`.
 - `speech_regions` must use a small `speech_pad_ms`: the 400 ms default erases the pauses the chunker (`localflow/chunked.py`) cuts at.

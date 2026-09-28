@@ -114,7 +114,8 @@ Measured on a Ryzen 7 5800X3D with a GTX 1060 (time to finish after you let go o
 
 - **Use your NVIDIA GPU (Windows).** *Settings → Transcription → Download GPU support* fetches just the three NVIDIA libraries Whisper needs (about 650 MB, from NVIDIA's official packages on PyPI) into the data folder; after that the GPU is used automatically (*Processor: Auto*). 3-5x faster.
 - **With a GPU, pick `large-v3-turbo`:** the most accurate model and still about 1 s for a short dictation. On a CPU it's slower than `medium.en`; there `small.en` (fast) or `medium.en` (accurate) are the choices.
-- **Transcribe while I talk** (on by default): at each natural pause after 8+ seconds, the finished part is transcribed in the background, so after a long dictation only the part since your last pause is left. Cuts happen only in silence, and each part is given the text before it as context. Short dictations are one normal pass, exactly as before.
+- **Every dictation is transcribed in pieces of at most 20 seconds,** however long you talk: cut at your pauses, or at the quietest moment if you don't pause, with each piece given the text before it as context. This keeps long dictations as reliable as short ones: Whisper works in 30-second windows and can lose its place inside a long one (in testing, a single 48-second pass with that fault lost 84 of 134 words; the same audio in pieces lost none).
+- **Transcribe while I talk** (on by default): those pieces are transcribed in the background as you go, so after a long dictation only the last piece is left. Dictations up to 20 seconds are one normal pass.
 - **Search: Fast** (default) tries one reading instead of five; it was as accurate in our tests and 10-20% quicker.
 - *Speed test* times your current setup on an 11-second sample.
 

@@ -33,7 +33,16 @@ def transcribe(samples, cfg, transcriber, get_key=keystore.get):
             note = "Cloud failed (%s); used local model" % str(exc)[:80]
     if not transcriber.ready.wait(timeout=600):
         raise RuntimeError("model is still loading")
-    text = transcriber.transcribe(samples, cfg.get("language"), cfg.get("vocabulary"), cfg.get("beam_size", 5))
+    # Long audio goes through in pieces of <= 20 s (cut at pauses), so no single call can
+    # hit Whisper's 30-second-window resume failure; short audio is one ordinary pass.
+    from .chunked import transcribe_in_chunks
+    from .transcriber import speech_regions
+
+    text = transcribe_in_chunks(
+        samples,
+        lambda piece, ctx: transcriber.transcribe(piece, cfg.get("language"), cfg.get("vocabulary"),
+                                                  cfg.get("beam_size", 5), context=ctx),
+        speech_regions)
     return text, "local:%s" % transcriber.model_name, note
 
 
