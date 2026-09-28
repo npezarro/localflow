@@ -9,7 +9,7 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-from . import __version__, apps, audio, config, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
+from . import __version__, apps, audio, config, feedback, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
 from .history import History
 from .dictionary import Dictionary
 from .dictionary_ui import DictionaryTab
@@ -51,6 +51,8 @@ class App:
         self.live_active = False
         self.chunker = None  # (ChunkedTranscription, stop Event, thread) during a normal dictation
         self.continuous = False  # always-on live listening (pause/resume hotkey)
+        self.correcting = None  # {"item", "started"} while recording a spoken correction
+        self.last_paste = None  # where the last transcript was pasted, for an in-place correction
         self._blocked_notice = None
         self.record_started = 0.0
         self.polish_failures = 0
@@ -262,13 +264,15 @@ class App:
         else:
             text = "Press %s to start dictating, press it again to paste. Esc cancels." % hk
         text += "  Paste last: %s." % hotkey.format_combo(self.cfg["paste_last_hotkey"])
+        text += "  Correct by voice: %s." % hotkey.format_combo(self.cfg["feedback_hotkey"])
         text += "  Live typing is %s (%s toggles)." % ("ON" if self.cfg["live_typing"] else "off",
                                                       hotkey.format_combo(self.cfg["live_hotkey"]))
         self.hint_var.set(text)
 
     def show_overlay(self, mode, text=""):
         self.indicator.live = bool(self.cfg["live_typing"])
-        kind = {"rec": "listening", "locked": "locked", "message": "message", "continuous": "continuous"}.get(mode)
+        kind = {"rec": "listening", "locked": "locked", "message": "message", "continuous": "continuous",
+                "correcting": "correcting"}.get(mode)
         if kind is None:
             kind = "polish" if text.startswith("Cleaning") else "busy"
         self.indicator.show(kind, text)
@@ -301,6 +305,10 @@ class App:
                 lambda: self.ctl_q.put(("paste_last",))
         except ValueError:
             pass
+        try:
+            oneshots[hotkey.parse_combo(self.cfg["feedback_hotkey"])] = lambda: self.ctl_q.put(("feedback",))
+        except ValueError:
+            pass
         self.listener = hotkey.HotkeyListener(machine, oneshots)
         self.listener.start()
 
@@ -317,6 +325,15 @@ class App:
         while True:
             cmd = self.ctl_q.get()[0]
             try:
+                if cmd == "feedback":
+                    self._toggle_feedback()
+                    continue
+                if self.correcting and cmd in ("start", "stop", "cancel"):
+                    if cmd == "cancel":
+                        self.correcting = None
+                        self.recorder.stop(keep_tail=False)
+                        self.ui_q.put(("idle",))
+                    continue  # the dictation hotkey waits until the correction is finished
                 if self.continuous and cmd in ("start", "stop", "cancel"):
                     continue  # the dictation hotkey is ignored while continuous live mode runs
                 if cmd == "continuous":
@@ -411,7 +428,15 @@ class App:
 
     def _work_loop(self):
         while True:
-            samples, seconds, chunker = self.work_q.get()
+            job = self.work_q.get()
+            if isinstance(job[0], str) and job[0] == "feedback":
+                try:
+                    self._apply_feedback(job[1], job[2])
+                except Exception as exc:
+                    log.exception("correction failed")
+                    self.ui_q.put(("error", "Correction failed: %s" % exc))
+                continue
+            samples, seconds, chunker = job
             try:
                 st = audio.stats(samples)
                 if self.cfg["save_last_recording"]:
@@ -443,6 +468,8 @@ class App:
                 self._wait_for_keys_up()
                 if self._may_type():
                     self.paster.deliver(text, self.cfg["auto_paste"], self.cfg["restore_clipboard"])
+                    if self.cfg["auto_paste"]:
+                        self._note_paste(item["id"])
                 else:
                     output.set_clipboard(text)  # still on the clipboard and in history
                 self.ui_q.put(("transcript", item))
@@ -454,6 +481,110 @@ class App:
             except Exception as exc:
                 log.exception("transcription failed")
                 self.ui_q.put(("error", "Transcription failed: %s" % exc))
+
+    # ------------------------------------------------------------------ spoken corrections
+    # Terminals treat Ctrl+Z as "suspend", so an in-place fix there would do damage.
+    NO_UNDO_APPS = ("windowsterminal", "cmd", "powershell", "pwsh", "conhost", "wsl", "mintty",
+                    "alacritty", "wezterm", "com.apple.terminal", "com.googlecode.iterm2", "kitty")
+
+    def _note_paste(self, item_id):
+        self.last_paste = {"id": item_id, "app": apps.foreground(), "t": time.monotonic(),
+                           "keys": self.listener.user_keys if self.listener else -1}
+
+    def _can_fix_in_place(self, item):
+        """Undo + paste is only safe right after our own paste, in the same app, with no typing since."""
+        lp = self.last_paste
+        if not (self.cfg["feedback_fix_in_place"] and lp and lp["id"] == item["id"] and self.listener):
+            return False
+        now = apps.foreground()
+        if not now or not lp["app"] or now.get("id") != lp["app"].get("id") or \
+                now.get("title") != lp["app"].get("title"):
+            return False
+        app_id = os.path.splitext((now.get("id") or "").lower())[0]
+        if app_id in self.NO_UNDO_APPS:
+            return False
+        return lp["keys"] == self.listener.user_keys and time.monotonic() - lp["t"] < 180
+
+    def _toggle_feedback(self):
+        """Runs on the control thread: start or finish recording a spoken correction."""
+        if self.correcting:
+            info, self.correcting = self.correcting, None
+            samples = self.recorder.stop()
+            if self.cfg["sounds"]:
+                audio.play(audio.tone(660))
+            if len(samples) < audio.SAMPLE_RATE * 0.3:
+                self.ui_q.put(("idle",))
+                return
+            self.ui_q.put(("overlay", "busy", "Correcting…"))
+            self.work_q.put(("feedback", samples, info))
+            return
+        if self.recorder.active or self.continuous:
+            self.ui_q.put(("overlay", "message", "Finish dictating first, then correct"))
+            return
+        item = self.history.last()
+        if not item:
+            self.ui_q.put(("overlay", "message", "Nothing to correct yet"))
+            return
+        self.recorder.start()
+        self.correcting = {"item": item, "started": time.monotonic()}
+        if self.cfg["sounds"]:
+            audio.play(audio.tone(990))
+        self.ui_q.put(("correcting",))
+
+        def time_limit(info=self.correcting):
+            if self.correcting is info:
+                self.ctl_q.put(("feedback",))  # 30 s is plenty for a correction
+        timer = threading.Timer(30, time_limit)
+        timer.daemon = True
+        timer.start()
+
+    def _apply_feedback(self, samples, info):
+        """Runs on the work thread: hear the correction, apply it, save / learn / paste."""
+        if not self.transcriber.ready.wait(timeout=600):
+            raise RuntimeError("model is still loading")
+        item = next((i for i in self.history.items if i["id"] == info["item"]["id"]), info["item"])
+        old = item["text"]
+        cfg = dict(self._run_cfg(), replacements={}, polish="off")
+        spoken, _engine, _note = pipeline.transcribe(samples, cfg, self.transcriber)
+        spoken = spoken.strip()
+        log.info("spoken correction: %r", spoken)
+        if not spoken:
+            self.ui_q.put(("error", "Didn't catch the correction"))
+            return
+        parsed = feedback.parse(spoken)
+        explicit = parsed and (parsed[0] or feedback.spelled_out(spoken))
+        ai = self.cfg["polish"] != "off" and not self.polish_paused
+        new, how = (None, "")
+        if explicit or not ai:
+            new, how = feedback.correct(old, spoken)
+        if new is None and ai:
+            self.ui_q.put(("overlay", "polish", "Cleaning up: applying your correction…"))
+            try:
+                new = polish.correct_with_ai(old, spoken, self._run_cfg(), keystore.get)
+                how = "“%s”" % spoken
+            except Exception as exc:
+                log.warning("AI correction failed: %s", exc)
+                new, how = None, "AI couldn't apply “%s”" % spoken
+        if new is None or new.strip() == old.strip():
+            reason = how or "no change for “%s”" % spoken
+            self.ui_q.put(("error", reason[0].upper() + reason[1:]))
+            return
+        if old.endswith(" ") and not new.endswith((" ", "\n")):
+            new += " "
+        self.history.update(item["id"], text=new, original=item.get("original", old))
+        learned = []
+        if self.cfg.get("learn"):
+            learned = self.learner.learn_correction(old, new, self.transcriber.is_uncommon)
+        self._wait_for_keys_up()
+        if self._can_fix_in_place(item) and self._may_type(notify=False):
+            self.paster.undo_and_paste(new)
+            self._note_paste(item["id"])
+            where = "Fixed"
+        else:
+            output.set_clipboard(new)
+            where = "Corrected, copied"
+        log.info("correction applied (%s): %s", where, how)
+        self.ui_q.put(("corrected", "%s: %s" % (where, how), bool(learned)))
 
     def _run_cfg(self):
         """Settings for one dictation: yours plus what LocalFlow has learned."""
@@ -643,6 +774,16 @@ class App:
         kind = ev[0]
         if kind == "recording":
             self.show_overlay("rec", "Listening…")
+        elif kind == "correcting":
+            self.show_overlay("correcting", "")
+            self.set_status("Say the correction, then press %s again"
+                            % hotkey.format_combo(self.cfg["feedback_hotkey"]))
+        elif kind == "corrected":
+            self.show_overlay("message", ev[1][:70])
+            self.set_status(ev[1])
+            self.refresh_history()
+            if ev[2]:
+                self.settings.refresh_learned()
         elif kind == "locked":
             self.show_overlay("locked", "Hands-free · hotkey to finish")
         elif kind == "transcribing":

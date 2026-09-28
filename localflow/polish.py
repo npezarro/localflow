@@ -242,6 +242,39 @@ def run_cli(prefix, name, cfg, text, timeout):
     return _run(prefix, name, args, text, timeout)
 
 
+CORRECT_PROMPT = (
+    "You apply a spoken correction to a dictated transcript. The user message contains the "
+    "TRANSCRIPT and the CORRECTION the speaker said about it. Return the full corrected "
+    "transcript and nothing else: change only what the correction asks for and keep every "
+    "other word, the punctuation and the formatting exactly as they are. If the correction "
+    "cannot be applied, return the transcript unchanged.")
+
+
+def correct_with_ai(text, instruction, cfg, get_key):
+    """Free-form spoken correction through the configured clean-up provider."""
+    provider = cfg.get("polish", "off")
+    user = "TRANSCRIPT:\n%s\n\nCORRECTION:\n%s" % (text, instruction)
+    timeout = float(cfg.get("polish_timeout", 20)) + 8
+    if provider in ("claude", "codex"):
+        prefix = find_cli(provider, cfg.get(provider + "_path", ""))
+        if not prefix:
+            raise RuntimeError("%s not found" % provider)
+        args = (claude_args(CORRECT_PROMPT, cfg.get("claude_model") or "sonnet") if provider == "claude"
+                else codex_args(CORRECT_PROMPT, cfg.get("codex_model")))
+        out = _run(prefix, provider, args, user, timeout)
+    elif provider == "api":
+        preset = cloud.CHAT_PRESETS[cfg.get("polish_api_provider", "groq")]
+        out = cloud.chat(CORRECT_PROMPT, user, cfg.get("polish_api_base_url") or preset["base_url"],
+                         cfg.get("polish_api_model") or preset["model"], get_key(preset["key_name"]), timeout)
+    else:
+        raise RuntimeError("no AI clean-up set up")
+    out = re.sub(r"(?s)<think>.*?</think>", "", out)
+    out = re.sub(r"^```\w*\n?|\n?```$", "", out.strip()).strip().strip('"')
+    if not out or not (0.5 <= len(out.split()) / max(1, len(text.split())) <= 1.6):
+        raise RuntimeError("AI correction looked wrong: %r" % out[:120])
+    return out
+
+
 def build_system(prompt, vocabulary):
     system = prompt or DEFAULT_PROMPT
     if vocabulary:

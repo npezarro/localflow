@@ -98,6 +98,8 @@ class Indicator:
     def _base_width(self, mode, text):
         if mode == "continuous":
             return 176
+        if mode == "correcting":
+            return 196
         extra = 38 if self.live and mode in ("listening", "locked") else 0
         if mode == "locked":
             return 196 + extra
@@ -145,7 +147,11 @@ class Indicator:
             c.create_text(width - px(14), mid, text="LIVE", anchor="e", fill=ACCENT,
                           font=("TkDefaultFont", 8, "bold"))
             left = px(30)
-        right = px(84) if self.mode == "locked" else px(50) if self.mode == "continuous" else px(20)
+        if self.mode == "correcting":  # recording a spoken correction
+            c.create_text(width - px(14), mid, text="correction", anchor="e", fill=ACCENT,
+                          font=("TkDefaultFont", 8, "bold"))
+        right = (px(84) if self.mode == "locked" else px(50) if self.mode == "continuous"
+                 else px(80) if self.mode == "correcting" else px(20))
         if self.live and self.mode in ("listening", "locked"):
             right += px(38)
             c.create_text(width - (px(84) if self.mode == "locked" else px(16)), mid, text="LIVE", anchor="e",
@@ -155,7 +161,7 @@ class Indicator:
         t = time.monotonic()
         for i in range(N_BARS):
             centre_weight = 1 - abs(i - (N_BARS - 1) / 2) / (N_BARS / 2)  # taller in the middle
-            if self.mode in ("listening", "locked", "continuous"):
+            if self.mode in ("listening", "locked", "continuous", "correcting"):
                 lv = self.levels[-1 - abs(i - N_BARS // 2)]  # recent level radiates from the centre
                 wobble = 0.75 + 0.25 * math.sin(t * 9 + i * 1.7)
                 bar_h = px(3) + (H - px(12)) * min(1.0, lv * 1.4) * (0.45 + 0.55 * centre_weight) * wobble

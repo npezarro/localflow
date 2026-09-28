@@ -40,6 +40,7 @@ Both are currently unsigned, so Windows SmartScreen may say it "protected your P
 | Hands-free | while holding, tap `Space`; press the hotkey again to finish | same |
 | Cancel | `Esc` | `Esc` |
 | Paste last transcript again | `Alt` + `Shift` + `Z` | `Option` + `Shift` + `Z` |
+| Correct the last transcript by voice | `Alt` + `Shift` + `X`, speak, press again | `Option` + `Shift` + `X` |
 | Turn live typing on/off | `Alt` + `Shift` + `L` | `Option` + `Shift` + `L` |
 | Start / pause always-on live listening | `Ctrl` + `Shift` + `Space` | `Control` + `Shift` + `Space` |
 
@@ -56,6 +57,19 @@ Trade-offs: live typing uses the local model (so it works offline, but not with 
 A floating pill appears at the bottom centre of the monitor you're working on (the one with the focused window) while you dictate: a live waveform that follows your voice, a red dot in hands-free mode, then a travelling wave while it transcribes (blue while AI clean-up runs). It never takes focus, so the text still lands in your app. Taps shorter than 0.3 s are ignored, and if you press a different key while holding the hotkey (for example `Ctrl`+`Win`+`D`), LocalFlow backs off so your normal shortcuts still work.
 
 **Transcripts tab:** every dictation, newest first. Search, double-click to copy, delete, or clear. Select one to see it below the list; fix any mistakes there and press **Save correction** (the fixed text is also copied to the clipboard).
+
+### Correcting by voice
+
+Heard something wrong? Press `Alt`+`Shift`+`X` (the pill shows **correction**), say what to fix, and press it again. LocalFlow applies it to your last transcript:
+
+| Say | What happens |
+|---|---|
+| "Kabir nets should be Kubernetes" / "change Tuesday to Wednesday" / "replace Maria with Priya" / "it's Priya, not Maria" | that word or phrase is swapped |
+| "Kubernetes is spelled K U B E R N E T E S" / "spell it P R I Y A" | the closest-sounding word is replaced with that spelling |
+| "Kubernetes" (just the right word) | the closest-sounding word is replaced |
+| anything else ("make the last sentence a question") | needs AI clean-up set up; Claude / ChatGPT / your API key applies it |
+
+The fix is saved in Transcripts (the original is kept), copied to the clipboard, and learned like a *Save correction*, so the same mistake is corrected in future dictations. If the transcript was just pasted and you haven't typed anything since, LocalFlow also swaps it in place in that app (undo, then paste the fixed text). It never does that in a terminal, where `Ctrl`+`Z` means something else, or after you've typed or switched windows; then the fixed text is on the clipboard for you to paste. Turn the in-place swap off in *Settings → Dictation*. Live-typed text isn't swapped in place (it was typed, not pasted).
 
 ### Teaching pronunciation (Dictionary tab)
 

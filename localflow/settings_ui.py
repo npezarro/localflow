@@ -154,6 +154,21 @@ class SettingsPanel:
                    command=lambda: self.app.capture_hotkey(self.vars["paste_last_hotkey"])).pack(
             side="left", padx=4)
         self._row(s, "Paste last transcript", f)
+        f = ttk.Frame(s)
+        ttk.Entry(f, textvariable=self._var("feedback_hotkey"), width=22).pack(side="left", fill="x",
+                                                                              expand=True)
+        ttk.Button(f, text="Record…",
+                   command=lambda: self.app.capture_hotkey(self.vars["feedback_hotkey"])).pack(
+            side="left", padx=4)
+        self._row(s, "Correct last transcript", f,
+                  "Press, say what was wrong, press again. For example: \u201cKabir nets should be "
+                  "Kubernetes\u201d, \u201cchange Tuesday to Wednesday\u201d, \u201cit's Priya, not "
+                  "Maria\u201d, \u201cspell it P R I Y A\u201d. With AI clean-up set up, any instruction "
+                  "works (\u201cmake the last sentence a question\u201d). The fix is saved, copied and learned.")
+        ttk.Checkbutton(s, text="Also fix it in the app I pasted into (undo + paste, only if I haven't typed since)",
+                        variable=self._var("feedback_fix_in_place", tk.BooleanVar)).grid(row=s._row, column=1,
+                                                                                         sticky="w")
+        s._row += 1
         ttk.Checkbutton(s, text="Live typing: type words into the focused app while you speak",
                         variable=self._var("live_typing", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
         s._row += 1
@@ -490,7 +505,7 @@ class SettingsPanel:
     def collect(self):
         """Form -> new config dict. Raises ValueError with a user-facing message."""
         new = dict(self.app.cfg)
-        for key in ("hotkey", "paste_last_hotkey", "live_hotkey", "live_pause_hotkey"):
+        for key in ("hotkey", "paste_last_hotkey", "feedback_hotkey", "live_hotkey", "live_pause_hotkey"):
             value = self.vars[key].get().strip().lower()
             try:
                 hotkey.parse_combo(value)
@@ -498,7 +513,7 @@ class SettingsPanel:
                 raise ValueError("The %s can't be empty." % key.replace("_", " "))
             new[key] = value
         for key, var in self.vars.items():
-            if key in ("hotkey", "paste_last_hotkey", "live_hotkey", "live_pause_hotkey"):
+            if key in ("hotkey", "paste_last_hotkey", "feedback_hotkey", "live_hotkey", "live_pause_hotkey"):
                 continue
             if key == "engine":
                 new[key] = _key_for(ENGINES, var.get())

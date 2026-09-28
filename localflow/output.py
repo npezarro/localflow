@@ -50,6 +50,18 @@ class Paster:
             self._kb.press("v")
             self._kb.release("v")
 
+    def undo_and_paste(self, text):
+        """Replace the text just pasted: undo the paste in the app, then paste ``text``."""
+        from pynput.keyboard import Key
+
+        set_clipboard(text)
+        mod = Key.cmd if IS_MAC else Key.ctrl
+        with self._kb.pressed(mod):
+            self._kb.press("z")
+            self._kb.release("z")
+        time.sleep(0.15)
+        self.paste_shortcut()
+
     def deliver(self, text, auto_paste=True, restore_clipboard=False):
         previous = get_clipboard() if restore_clipboard else None
         set_clipboard(text)

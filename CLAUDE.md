@@ -21,4 +21,7 @@ Python 3.12, faster-whisper (CTranslate2, CPU int8), pynput hotkeys, sounddevice
 - `speech_regions` must use a small `speech_pad_ms`: the 400 ms default erases the pauses the chunker (`localflow/chunked.py`) cuts at.
 - `onnxruntime` is pinned to 1.23.2 on macOS: later versions dropped Intel mac wheels.
 - `LOCALFLOW_FAKE_MIC=<wav>` feeds a WAV instead of the mic (E2E testing); `LOCALFLOW_DATA_DIR` overrides the data folder.
+- `work_q` carries two job shapes: `(samples, seconds, chunker)` and `("feedback", samples, info)`. Dispatch with `isinstance(job[0], str)`: `ndarray == "feedback"` raises outside the try and silently kills the transcription thread (the app keeps running, nothing transcribes).
+- Spoken corrections (`localflow/feedback.py`, `App._apply_feedback`): the in-place swap is undo + paste, so it only runs right after LocalFlow's own paste, same window, no user keystrokes since (`HotkeyListener.user_keys`), never in terminals (`App.NO_UNDO_APPS`: Ctrl+Z suspends there). Otherwise clipboard only.
+- Windows E2E harness gotcha: an Alt-based dictation hotkey puts a Tk test window into menu mode and eats the next Ctrl+V; use a single key (F9) for the harness hotkey.
 - Tests: `python -m pytest -q` (test_selftest downloads tiny.en on first run).

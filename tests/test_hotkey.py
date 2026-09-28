@@ -110,3 +110,15 @@ def test_combo_text_and_format():
     assert combo_text({"alt_r"}) == "alt_r"
     assert combo_text({"alt_l", "shift_r", "z"}) == "alt+shift_r+z"
     assert format_combo("ctrl+cmd") in ("Ctrl+Win", "Ctrl+Cmd")
+
+
+def test_user_keys_ignore_localflow_hotkeys():
+    from localflow.hotkey import HotkeyListener, parse_combo
+
+    listener = HotkeyListener(HotkeyMachine("ctrl+cmd"), {parse_combo("alt+shift+x"): lambda: None})
+    # Keys of LocalFlow's own hotkeys (and any modifier) don't count as the user typing...
+    for name in ("ctrl_l", "cmd_r", "alt_l", "shift_r", "x", "space", "esc"):
+        assert listener._is_hotkey_key(name), name
+    # ...anything else does, so an in-place correction won't undo over the user's edits.
+    for name in ("a", "backspace", "left", "enter", "z"):
+        assert not listener._is_hotkey_key(name), name

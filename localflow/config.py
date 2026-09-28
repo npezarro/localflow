@@ -13,6 +13,9 @@ DEFAULTS = {
     "mode": "hold",
     "lock_key": "space",
     "paste_last_hotkey": "alt+shift+z",
+    # Spoken correction: press, say what was wrong ("Kabir nets should be Kubernetes"), press again
+    "feedback_hotkey": "alt+shift+x",
+    "feedback_fix_in_place": True,  # also swap the fix into the app you pasted into (undo + paste)
     # Live typing: words are typed into the focused app while you speak
     "live_typing": False,
     "live_hotkey": "alt+shift+l",  # toggles live typing on/off

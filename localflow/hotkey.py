@@ -189,6 +189,12 @@ class HotkeyListener:
         self._capture = None  # (callback, keys seen) while the user records a new hotkey
         self._swallowed = set()  # keys of a fired one-shot hotkey, kept out of the focused app
         self._mac_swallow = False
+        self.user_keys = 0  # presses of keys that aren't part of any LocalFlow hotkey
+
+    def _is_hotkey_key(self, name):
+        combos = list(self.oneshots) + [self.machine.combo, {self.machine.lock_key, "esc"}]
+        return (name in SIDED or name[:-2] in SIDED
+                or any(token_matches(t, name) for c in combos for t in c))
 
     def capture_next(self, callback):
         """Record the next chord the user presses; callback(combo_text) once all keys are up."""
@@ -282,6 +288,8 @@ class HotkeyListener:
             self._capture[2].add(name)
             return
         self.machine.press(name)
+        if not self._is_hotkey_key(name):
+            self.user_keys += 1
         for combo, callback in self.oneshots.items():
             if combo_matches(combo, self.machine.pressed) and combo not in self._oneshot_fired:
                 self._oneshot_fired.add(combo)
