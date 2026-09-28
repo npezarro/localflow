@@ -102,6 +102,24 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 - **Output:** paste into the focused app, restore the previous clipboard, remove filler words, trailing space, sounds, keep the last recording for troubleshooting.
 - **Words:** vocabulary (names and jargon to spell your way; this is the single biggest accuracy win for names) and replacements (`spoken => written`, e.g. `new line => \n`).
 
+### Making it faster
+
+Measured on a Ryzen 7 5800X3D with a GTX 1060 (time to finish after you let go of the hotkey):
+
+| Setup | 8-second dictation | 32-second dictation |
+|---|---|---|
+| medium.en on the CPU | ~5.4 s | ~12.4 s (→ ~5.5 s with *Transcribe while I talk*) |
+| medium.en on an NVIDIA GPU | ~1.3 s | ~5.9 s (→ ~2.1 s while talking) |
+| large-v3-turbo on an NVIDIA GPU | ~1.0 s | ~2.4 s (→ ~1.1 s while talking) |
+
+- **Use your NVIDIA GPU (Windows).** *Settings → Transcription → Download GPU support* fetches just the three NVIDIA libraries Whisper needs (about 650 MB, from NVIDIA's official packages on PyPI) into the data folder; after that the GPU is used automatically (*Processor: Auto*). 3-5x faster.
+- **With a GPU, pick `large-v3-turbo`:** the most accurate model and still about 1 s for a short dictation. On a CPU it's slower than `medium.en`; there `small.en` (fast) or `medium.en` (accurate) are the choices.
+- **Transcribe while I talk** (on by default): at each natural pause after 8+ seconds, the finished part is transcribed in the background, so after a long dictation only the part since your last pause is left. Cuts happen only in silence, and each part is given the text before it as context. Short dictations are one normal pass, exactly as before.
+- **Search: Fast** (default) tries one reading instead of five; it was as accurate in our tests and 10-20% quicker.
+- *Speed test* times your current setup on an 11-second sample.
+
+Every local pass costs about the same whether it's 2 or 25 seconds of audio (Whisper always processes a 30-second window), which is why short dictations only get faster with a GPU or a smaller model.
+
 ### Why subscriptions only cover clean-up, not transcription
 
 Neither Anthropic nor OpenAI offers speech-to-text on a subscription login. Claude's dictation only exists inside Claude Code, and ChatGPT's transcription endpoint is private and requires impersonating OpenAI's own apps, which LocalFlow deliberately doesn't do. Online transcription therefore uses an API key (Groq's free tier covers normal dictation use), while the clean-up pass can use your Claude or ChatGPT subscription through their official command-line tools.

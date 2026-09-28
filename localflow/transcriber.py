@@ -43,22 +43,53 @@ def speech_in(samples, threshold=0.3):
     return bool(get_speech_timestamps(samples, opts))
 
 
+def speech_regions(samples, threshold=0.35):
+    """[(start_s, end_s)] of speech in ``samples`` (Silero VAD)."""
+    if len(samples) < 16000 * 0.25:
+        return []
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+    # speech_pad_ms defaults to 400, which widens every region and shrinks a 0.9 s pause to
+    # 0.1 s; pauses are what we look for here, so keep the padding small.
+    opts = VadOptions(threshold=threshold, min_speech_duration_ms=100, min_silence_duration_ms=300,
+                      speech_pad_ms=30)
+    return [(r["start"] / 16000, r["end"] / 16000) for r in get_speech_timestamps(samples, opts)]
+
+
 class Transcriber:
     def __init__(self):
         self.model = None
         self.model_name = None
         self._lock = threading.Lock()
         self.ready = threading.Event()
+        self.device = "cpu"
+        self.device_error = ""
 
-    def load(self, name):
+    def load(self, name, device="auto"):
+        """device: "auto" (NVIDIA GPU when its libraries are installed, else CPU), "cuda", "cpu"."""
         target, download_root = resolve_model(name)
         from faster_whisper import WhisperModel
 
-        log.info("loading model %s from %s", name, target)
+        from . import gpu
+
         t0 = time.time()
-        threads = max(1, min(8, (os.cpu_count() or 4)))
-        model = WhisperModel(target, device="cpu", compute_type="int8", cpu_threads=threads,
-                             download_root=download_root)
+        # CTranslate2 runs best with one thread per physical core (hyper-threads add nothing).
+        threads = max(1, min(8, (os.cpu_count() or 4) // 2))
+        use_cuda = device == "cuda" or (device == "auto" and gpu.available())
+        model = None
+        if use_cuda:
+            try:
+                gpu.activate()
+                model = WhisperModel(target, device="cuda", compute_type="int8", download_root=download_root)
+                self.device = "cuda"
+            except Exception as exc:
+                log.warning("GPU load failed (%s); using the CPU", exc)
+                self.device_error = str(exc)[:200]
+        if model is None:
+            model = WhisperModel(target, device="cpu", compute_type="int8", cpu_threads=threads,
+                                 download_root=download_root)
+            self.device = "cpu"
+        log.info("loading model %s from %s on %s", name, target, self.device)
         with self._lock:
             self.model, self.model_name = model, name
         self.ready.set()
@@ -76,20 +107,28 @@ class Transcriber:
         except Exception:
             return False
 
-    def transcribe(self, audio, language="en", vocabulary=None, beam_size=5):
+    def transcribe(self, audio, language="en", vocabulary=None, beam_size=5, context=None):
+        """``context``: text that came just before this audio (earlier chunks of the same
+        dictation), so a chunk continues the sentence instead of starting fresh."""
         with self._lock:
             model = self.model
             if model is None:
                 raise RuntimeError("model not loaded")
-            prompt = None
+            parts = []
             if vocabulary:
-                prompt = "Vocabulary: " + ", ".join(vocabulary) + "."
+                parts.append("Vocabulary: " + ", ".join(vocabulary) + ".")
+            if context:
+                parts.append(context.strip()[-300:])
+            prompt = " ".join(parts) or None
             kwargs = dict(
                 language=None if language in (None, "", "auto") else language,
                 beam_size=beam_size,
                 condition_on_previous_text=False,
                 initial_prompt=prompt,
-                without_timestamps=True,
+                # Timestamps must stay ON: without them, when Whisper stops writing early in a
+                # 30-second window it can't tell where it stopped and skips the rest of the
+                # window, silently dropping speech from dictations over ~20 s.
+                without_timestamps=False,
             )
             # Voice-activity filtering stops Whisper inventing text over silence; keep it
             # permissive so soft or clipped speech isn't thrown away.

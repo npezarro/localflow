@@ -45,7 +45,9 @@ DEFAULTS = {
     "claude_path": "",
     "codex_path": "",
     "language": "en",  # "auto" to detect
-    "beam_size": 5,
+    "beam_size": 1,  # 1 = fast (measured as accurate as 5 on our clips, 10-20% quicker); 5 = thorough
+    "device": "auto",  # "auto" = NVIDIA GPU when GPU support is downloaded, else CPU; "cpu" = always CPU
+    "background_transcribe": True,  # transcribe finished stretches while you talk (shorter wait on long dictations)
     "input_device": None,  # None = system default microphone
     "warm_mic": True,  # keep the mic open so the first word isn't clipped
     "save_last_recording": True,  # data/last-recording.wav, for troubleshooting

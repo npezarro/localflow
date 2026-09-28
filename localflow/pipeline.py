@@ -37,9 +37,13 @@ def transcribe(samples, cfg, transcriber, get_key=keystore.get):
     return text, "local:%s" % transcriber.model_name, note
 
 
-def process(samples, cfg, transcriber, get_key=keystore.get, on_stage=None):
+def process(samples, cfg, transcriber, get_key=keystore.get, on_stage=None, raw=None):
+    """``raw``: transcript already produced (e.g. by transcribing while you talked)."""
     t0 = time.time()
-    raw, engine, note = transcribe(samples, cfg, transcriber, get_key)
+    if raw is None:
+        raw, engine, note = transcribe(samples, cfg, transcriber, get_key)
+    else:
+        engine, note = "local:%s (while talking)" % transcriber.model_name, ""
     t_stt = time.time() - t0
     text = textproc.clean(raw, cfg)
     polished = False

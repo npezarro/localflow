@@ -18,7 +18,8 @@ from .learn import Learner
 from .live import LiveSession
 from .settings_ui import SettingsPanel
 from .setup_ui import SetupDialog
-from .transcriber import Transcriber, is_local, speech_in
+from .chunked import ChunkedTranscription
+from .transcriber import Transcriber, is_local, speech_in, speech_regions
 from . import ui
 from .ui import px
 
@@ -48,6 +49,7 @@ class App:
         self.work_q = queue.Queue()
         self.live_q = queue.Queue()
         self.live_active = False
+        self.chunker = None  # (ChunkedTranscription, stop Event, thread) during a normal dictation
         self.continuous = False  # always-on live listening (pause/resume hotkey)
         self._blocked_notice = None
         self.record_started = 0.0
@@ -330,6 +332,8 @@ class App:
                     if self.cfg["live_typing"]:
                         self.live_active = True
                         self.live_q.put(("begin",))
+                    elif self.cfg["background_transcribe"] and self.cfg["engine"] == "local":
+                        self._start_chunker()
                     if self.cfg["sounds"]:
                         audio.play(audio.tone(880))
                     self.ui_q.put(("recording",))
@@ -343,13 +347,19 @@ class App:
                         self.ui_q.put(("transcribing",))
                         self.live_q.put(("finish", samples, seconds, self.recorder.offset))
                         continue
+                    chunker, self.chunker = self.chunker, None
+                    if chunker:
+                        chunker[1].set()  # stop cutting; the work loop finishes it
                     if len(samples) < audio.SAMPLE_RATE * 0.25:
                         self.ui_q.put(("idle",))
                         continue
                     self.ui_q.put(("transcribing",))
-                    self.work_q.put((samples, seconds))
+                    self.work_q.put((samples, seconds, chunker))
                 elif cmd == "cancel":
                     self.recorder.stop(keep_tail=False)
+                    if self.chunker:
+                        self.chunker[1].set()
+                        self.chunker = None
                     if self.live_active:
                         self.live_active = False
                         self.live_q.put(("cancel",))
@@ -372,15 +382,47 @@ class App:
         while self.listener and self.listener.machine.pressed and time.monotonic() < deadline:
             time.sleep(0.02)
 
+    def _start_chunker(self):
+        """Transcribe finished stretches in the background while the user is still talking."""
+        cfg = self._run_cfg()
+        chunker = ChunkedTranscription(
+            lambda x, ctx: self.transcriber.transcribe(audio.normalize(x), cfg["language"], cfg["vocabulary"],
+                                                       cfg["beam_size"], context=ctx),
+            speech_regions)
+        stop = threading.Event()
+
+        def run():
+            while not stop.is_set():
+                if not self.transcriber.ready.is_set():
+                    stop.wait(0.3)
+                    continue
+                try:
+                    samples, offset = self.recorder.peek()
+                    if not chunker.update(samples, offset):
+                        stop.wait(0.4)
+                except Exception:
+                    log.exception("background transcription failed")
+                    return
+
+        thread = threading.Thread(target=run, daemon=True, name="chunker")
+        thread.start()
+        self.chunker = (chunker, stop, thread)
+
     def _work_loop(self):
         while True:
-            samples, seconds = self.work_q.get()
+            samples, seconds, chunker = self.work_q.get()
             try:
                 st = audio.stats(samples)
                 if self.cfg["save_last_recording"]:
                     audio.save_wav(os.path.join(paths.data_dir(), "last-recording.wav"), samples)
                 cfg = self._run_cfg()
-                result = pipeline.process(samples, cfg, self.transcriber,
+                raw = None
+                if chunker:
+                    chunker[2].join()  # let an in-flight chunk finish
+                    if self.transcriber.ready.is_set():
+                        raw = chunker[0].finish(audio.normalize(samples))
+                        log.info("while-talking chunks: %d", chunker[0].chunks_done)
+                result = pipeline.process(samples, cfg, self.transcriber, raw=raw,
                                           on_stage=lambda _s: self.ui_q.put(("overlay", "busy", "Cleaning up…")))
                 log.info("dictation: audio %.1fs peak %.3f rms %.4f | %s %.2fs%s | %d chars%s",
                          st["seconds"], st["peak"], st["rms"], result["engine"], result["stt_s"],
@@ -576,7 +618,7 @@ class App:
 
         def run():
             try:
-                self.transcriber.load(name)
+                self.transcriber.load(name, device=self.cfg.get("device", "auto"))
                 self.ui_q.put(("model_ready", name))
             except Exception as exc:
                 log.exception("model load failed")
@@ -618,6 +660,7 @@ class App:
             self.set_status(ev[1], warn=True)
         elif kind == "model_ready":
             self.set_status("Ready · %s" % self._engine_label())
+            self.settings.refresh_gpu()
             if IS_MAC and self.listener and not self.listener.is_trusted:
                 self.set_status("Hotkeys blocked: allow LocalFlow in Privacy & Security > "
                                 "Accessibility and Input Monitoring, then restart", warn=True)
@@ -749,7 +792,7 @@ class App:
 
     # ------------------------------------------------------------------ settings
     def apply_settings(self, new):
-        model_changed = new["model"] != self.cfg["model"]
+        model_changed = new["model"] != self.cfg["model"] or new.get("device") != self.cfg.get("device")
         polish_changed = new["polish"] != self.cfg["polish"]
         if polish_changed:
             self.polish_paused = False
@@ -801,10 +844,51 @@ class App:
             base, model, _k = pipeline.cloud_settings(self.cfg)
             label = "%s (%s)" % (model, self.cfg["cloud_provider"])
         else:
-            label = self.cfg["model"]
+            label = "%s · %s" % (self.cfg["model"], "GPU" if self.transcriber.device == "cuda" else "CPU")
         if self.cfg["polish"] != "off":
             label += " + %s clean-up" % self.cfg["polish"]
         return label
+
+    # ------------------------------------------------------------------ speed
+    def speed_test(self):
+        """Time the current engine on the bundled 11-second sample."""
+        def run():
+            try:
+                if not self.transcriber.ready.wait(timeout=600):
+                    raise RuntimeError("model is still loading")
+                sample = audio.load_wav(os.path.join(paths.bundle_dir(), "samples", "jfk.wav"))
+                cfg = self._run_cfg()
+                self.transcriber.transcribe(sample[:16000 * 2], cfg["language"], None, cfg["beam_size"])  # warm up
+                t0 = time.time()
+                text = self.transcriber.transcribe(sample, cfg["language"], None, cfg["beam_size"])
+                took = time.time() - t0
+                msg = ("%s on the %s, %s search: %.1f s for 11 s of speech.\n\n\"%s\"\n\n"
+                       "That is roughly your wait after a short dictation. With 'Transcribe while I talk', "
+                       "long dictations wait only for the part since your last pause."
+                       % (self.transcriber.model_name, "GPU" if self.transcriber.device == "cuda" else "CPU",
+                          "fast" if cfg["beam_size"] == 1 else "thorough", took, text.strip()))
+                if self.transcriber.device_error:
+                    msg += "\n\nGPU not used: " + self.transcriber.device_error
+            except Exception as exc:
+                msg = "Speed test failed: %s" % exc
+            self.ui_q.put(("dialog", "Speed test", msg))
+
+        threading.Thread(target=run, daemon=True, name="speed-test").start()
+
+    def download_gpu(self, progress):
+        """Fetch GPU support, then reload the model on the GPU. Runs off the UI thread."""
+        from . import gpu
+
+        def run():
+            try:
+                mb = gpu.download(lambda msg, frac: self.ui_q.put(("call", lambda: progress("%s… %d%%" % (msg, frac * 100)))))
+                self.ui_q.put(("call", lambda: progress("Installed (%d MB). Loading the model on the GPU…" % mb)))
+                self.ui_q.put(("call", lambda: self.load_model(self.cfg["model"])))
+            except Exception as exc:
+                err = "Download failed: %s" % exc
+                self.ui_q.put(("call", lambda: progress(err)))
+
+        threading.Thread(target=run, daemon=True, name="gpu-download").start()
 
     def _open_mic(self):
         def run():

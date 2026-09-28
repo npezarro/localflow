@@ -34,6 +34,8 @@ BOOLS = [("auto_paste", "Paste into the focused app"),
 FLOATS = {"release_tail": "Keep listening after release", "preroll": "Keep before press"}
 
 
+DEVICES = [("auto", "Auto (GPU when available)"), ("cpu", "CPU only")]
+BEAMS = [(1, "Fast (recommended)"), (5, "Thorough")]
 TYPE_INTO = [("all", "All apps"), ("only", "Only the apps listed below"),
              ("except", "All apps except those listed below")]
 INTS = {"live_auto_pause_min": ("Auto-pause after silence", 0, 120)}
@@ -203,8 +205,29 @@ class SettingsPanel:
         s = self._section("Transcription")
         self._row(s, "Engine", self._combo(s, "engine", [lbl for _k, lbl in ENGINES], 52))
         self._row(s, "Local model", self._combo(s, "model", config.MODEL_CHOICES, 20, readonly=False),
-                  "base.en is bundled. small.en is more accurate (about 2x slower); large-v3-turbo "
-                  "is best but needs a fast CPU or Apple Silicon. Others download once.")
+                  "base.en is bundled; others download once. On a CPU: small.en is fast, medium.en more "
+                  "accurate but slow. With an NVIDIA GPU: large-v3-turbo is the most accurate and "
+                  "still fast (about 1 s for a short dictation).")
+        self._row(s, "Processor", self._combo(s, "device", [lbl for _k, lbl in DEVICES], 34),
+                  "Auto uses an NVIDIA GPU once GPU support is downloaded (about 3-5x faster), "
+                  "otherwise the CPU.")
+        if sys.platform == "win32":
+            f = ttk.Frame(s)
+            self.gpu_btn = ttk.Button(f, text="Download GPU support (about 1 GB)", command=self._gpu_download)
+            self.gpu_btn.pack(side="left")
+            self.gpu_status = tk.StringVar()
+            ttk.Label(f, textvariable=self.gpu_status, foreground=MUTED, wraplength=px(380)).pack(side="left", padx=8)
+            self._row(s, "NVIDIA GPU", f)
+        self._row(s, "Search", self._combo(s, "beam_size", [lbl for _k, lbl in BEAMS], 34),
+                  "Fast tries one reading at a time; Thorough compares five. In our tests they were "
+                  "equally accurate and Fast was 10-20% quicker.")
+        ttk.Checkbutton(s, text="Transcribe while I talk (much shorter wait after long dictations)",
+                        variable=self._var("background_transcribe", tk.BooleanVar)).grid(
+            row=s._row, column=1, sticky="w")
+        s._row += 1
+        f = ttk.Frame(s)
+        ttk.Button(f, text="Speed test", command=self.app.speed_test).pack(side="left")
+        self._row(s, "", f, "Times the current model on an 11-second sample.")
         self._row(s, "Language", self._combo(s, "language", ["en", "auto", "es", "fr", "de", "it", "pt",
                                                               "nl", "ja", "zh", "ko", "ru", "hi"], 8,
                                               readonly=False),
@@ -345,6 +368,38 @@ class SettingsPanel:
             self.apps_text.delete("1.0", "end")
             self.apps_text.insert("1.0", (text + "\n" if text else "") + name)
 
+    def refresh_gpu(self):
+        if not hasattr(self, "gpu_status"):
+            return
+        from . import gpu
+
+        t = self.app.transcriber
+        if gpu.libraries_present():
+            self.gpu_btn.configure(text="Remove GPU support", command=self._gpu_remove)
+            if t.device == "cuda":
+                self.gpu_status.set("Installed and in use.")
+            else:
+                self.gpu_status.set("Installed, not in use%s." % (": " + t.device_error if t.device_error else
+                                                                   " (Processor is set to CPU only)"))
+        elif not gpu.nvidia_present():
+            self.gpu_btn.configure(state="disabled")
+            self.gpu_status.set("No NVIDIA GPU found on this computer.")
+        else:
+            self.gpu_btn.configure(text="Download GPU support (about 1 GB)", command=self._gpu_download,
+                                   state="normal")
+            self.gpu_status.set("NVIDIA GPU found. Download support to use it.")
+
+    def _gpu_download(self):
+        self.gpu_btn.configure(state="disabled")
+        self.app.download_gpu(self.gpu_status.set)
+
+    def _gpu_remove(self):
+        from . import gpu
+
+        if messagebox.askyesno("LocalFlow", "Remove GPU support? LocalFlow will use the CPU."):
+            gpu.remove()
+            self.app.load_model(self.app.cfg["model"])
+
     def refresh_learned(self):
         self._learned_rows = self.app.learner.entries()
         self.learned_list.delete(0, "end")
@@ -388,6 +443,10 @@ class SettingsPanel:
                     var.set(_label_for(POLISH, cfg["polish"]))
                 elif key == "type_into":
                     var.set(_label_for(TYPE_INTO, cfg["type_into"]))
+                elif key == "device":
+                    var.set(_label_for(DEVICES, cfg["device"]))
+                elif key == "beam_size":
+                    var.set(_label_for(BEAMS, 1 if int(cfg["beam_size"]) <= 1 else 5))
                 elif key == "input_device":
                     var.set(next((n for i, n in self.app.devices if i == cfg["input_device"]),
                                  self.device_names[0]))
@@ -408,6 +467,7 @@ class SettingsPanel:
         finally:
             self._loading = False
         self.refresh_learned()
+        self.refresh_gpu()
         self._clean()
 
     def collect(self):
@@ -429,6 +489,10 @@ class SettingsPanel:
                 new[key] = _key_for(POLISH, var.get())
             elif key == "type_into":
                 new[key] = _key_for(TYPE_INTO, var.get())
+            elif key == "device":
+                new[key] = _key_for(DEVICES, var.get())
+            elif key == "beam_size":
+                new[key] = _key_for(BEAMS, var.get())
             elif key in INTS:
                 label, lo, hi = INTS[key]
                 try:
