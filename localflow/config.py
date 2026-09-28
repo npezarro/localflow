@@ -63,6 +63,8 @@ DEFAULTS = {
     "vocabulary": [],  # words/names Whisper should spell your way
     "replacements": {},  # spoken -> written, e.g. {"new line": "\n"}
     "history_limit": 500,
+    "auto_update_check": True,  # ask GitHub for a newer release at startup, at most once a day
+    "last_update_check": 0,
 }
 
 MODEL_CHOICES = [

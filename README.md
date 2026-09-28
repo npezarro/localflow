@@ -24,7 +24,7 @@ All versions and release notes: [Releases](https://github.com/npezarro/localflow
 
 **Windows portable:** unzip anywhere and double-click `LocalFlow\LocalFlow.exe`.
 
-Both are unsigned, so Windows SmartScreen may say it "protected your PC": click **More info → Run anyway**. Closing the window sends LocalFlow to the system tray; quit from the tray icon.
+Both are currently unsigned, so Windows SmartScreen may say it "protected your PC": click **More info → Run anyway**. (Signing is wired into the build and turns on once a certificate is configured; see `SIGNING.md`.) Closing the window sends LocalFlow to the system tray; quit from the tray icon.
 
 **Mac:** open the `.dmg` and drag LocalFlow into Applications (or unzip the portable zip anywhere). LocalFlow isn't notarized by Apple, so the first launch is blocked: open *System Settings → Privacy & Security*, scroll down, and click **Open Anyway** next to LocalFlow. (Terminal alternative: `xattr -dr com.apple.quarantine /Applications/LocalFlow.app`.) Then allow the three permissions it asks for, and quit and reopen LocalFlow:
 
@@ -101,6 +101,12 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 - **Apps:** *Type into* **All apps** (default), **Only the apps listed**, or **All apps except those listed**, for both pasting and live typing. List programs one per line (`chrome`, `slack`, `code`, `notepad`; on a Mac the app name like `Google Chrome` or its bundle id). *Apps you've dictated into* offers the ones you've actually used so you don't have to guess names. When the focused app isn't allowed, the text is copied to the clipboard and saved in Transcripts instead, and the pill says so.
 - **Output:** paste into the focused app, restore the previous clipboard, remove filler words, trailing space, sounds, keep the last recording for troubleshooting.
 - **Words:** vocabulary (names and jargon to spell your way; this is the single biggest accuracy win for names) and replacements (`spoken => written`, e.g. `new line => \n`).
+
+### Updates
+
+*Settings → Updates → Check now* (and, by default, a check at startup at most once a day) asks this project's GitHub releases for a newer version. If there is one, LocalFlow downloads the right file for how you installed it, verifies it against the checksum GitHub publishes, installs it and restarts; the installer version upgrades in place, the portable version swaps its files but never touches its `data` folder, and the Mac version replaces the app. Your settings, history and dictionary are always kept. Running the newer installer yourself works the same way.
+
+To move your data from another copy (say an old portable folder), use *Settings → Your data → Import from folder…* and pick that copy's `data` folder or the `LocalFlow` folder holding it: settings, transcripts, learned words and the dictionary are brought over, and any downloaded models are added so they don't need downloading again.
 
 ### Making it faster
 

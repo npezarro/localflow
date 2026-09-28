@@ -50,6 +50,14 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\LocalFlow.exe"; Description: "Launch LocalFlow"; Flags: nowait postinstall skipifsilent
+; In-app updates run this installer with /SILENT /RELAUNCH=1: start the new version afterwards.
+Filename: "{app}\LocalFlow.exe"; Flags: nowait; Check: ShouldRelaunch
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/c taskkill /IM LocalFlow.exe /F"; Flags: runhidden; RunOnceId: "StopLocalFlow"
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;

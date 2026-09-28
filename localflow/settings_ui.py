@@ -312,8 +312,25 @@ class SettingsPanel:
         f = ttk.Frame(s)
         ttk.Button(f, text="Back up…", command=self.backup).pack(side="left")
         ttk.Button(f, text="Restore…", command=self.restore).pack(side="left", padx=6)
+        ttk.Button(f, text="Import from folder…", command=self.import_folder).pack(side="left", padx=(0, 6))
         ttk.Button(f, text="Open data folder", command=self.open_data).pack(side="left")
         self._row(s, "", f)
+
+        s = self._section("Updates")
+        from . import __version__
+
+        ttk.Label(s, text="You have LocalFlow %s." % __version__).grid(row=s._row, column=0, columnspan=2, sticky="w")
+        s._row += 1
+        ttk.Checkbutton(s, text="Check for updates when LocalFlow starts (at most once a day)",
+                        variable=self._var("auto_update_check", tk.BooleanVar)).grid(row=s._row, column=0,
+                                                                                     columnspan=2, sticky="w")
+        s._row += 1
+        f = ttk.Frame(s)
+        ttk.Button(f, text="Check now", command=lambda: self.app.check_for_updates(True, self.update_status.set)).pack(side="left")
+        self.update_status = tk.StringVar()
+        ttk.Label(f, textvariable=self.update_status, foreground=MUTED, wraplength=px(420)).pack(side="left", padx=8)
+        self._row(s, "", f, "Updates come from this project's GitHub releases, are checked against GitHub's "
+                            "published checksum, and keep all your data.")
 
         s = self._section("Output")
         for key, label in BOOLS:
@@ -590,6 +607,32 @@ class SettingsPanel:
             self.app.set_status("Restored: " + ", ".join(restored))
         except Exception as exc:
             messagebox.showerror("LocalFlow", "Restore failed: %s" % exc)
+
+    def import_folder(self):
+        from tkinter import filedialog
+
+        from . import backup
+
+        folder = filedialog.askdirectory(title="Import LocalFlow data from a folder", mustexist=True)
+        if not folder:
+            return
+        src = backup.find_data_folder(folder)
+        if not src:
+            messagebox.showerror("LocalFlow", "No LocalFlow data found in that folder. Pick the data folder "
+                                              "(it contains config.json or history.jsonl) or the LocalFlow "
+                                              "folder that holds it.")
+            return
+        if not messagebox.askyesno(
+                "LocalFlow", "Import from %s?\n\nYour current settings, transcripts, learned words and "
+                             "dictionary are replaced with the ones there; downloaded models there are added." % src):
+            return
+        try:
+            imported = backup.import_folder(folder)
+            self.app.reload_data()
+            self.app.load_model(self.app.cfg["model"])
+            self.app.set_status("Imported: " + ", ".join(imported))
+        except Exception as exc:
+            messagebox.showerror("LocalFlow", "Import failed: %s" % exc)
 
     def open_data(self):
         path = paths.data_dir()

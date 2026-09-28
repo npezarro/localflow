@@ -87,6 +87,7 @@ class App:
         self._open_mic()
         self.root.after(40, self._poll)
         self.root.after(1200, self._maybe_setup)
+        self.root.after(4000, self._startup_update_check)
         if self.cfg["live_autostart"]:
             self.root.after(1500, lambda: self.ctl_q.put(("continuous",)))
         if IS_MAC and not platform_fix.macos_accessibility_trusted(prompt=True):
@@ -889,6 +890,75 @@ class App:
                 self.ui_q.put(("call", lambda: progress(err)))
 
         threading.Thread(target=run, daemon=True, name="gpu-download").start()
+
+    # ------------------------------------------------------------------ updates
+    def _startup_update_check(self):
+        if not self.cfg.get("auto_update_check") or time.time() - float(self.cfg.get("last_update_check") or 0) < 86400:
+            return
+        self.check_for_updates(interactive=False)
+
+    def check_for_updates(self, interactive=True, on_status=None):
+        from . import update
+
+        say = on_status or (lambda msg: None)
+        say("Checking GitHub for a newer version…")
+
+        def run():
+            try:
+                info = update.check()
+                self.cfg["last_update_check"] = time.time()
+                config.save(self.cfg)
+            except Exception as exc:
+                err = "Couldn't check for updates: %s" % str(exc)[:120]
+                self.ui_q.put(("call", lambda: say(err)))
+                if interactive:
+                    self.ui_q.put(("dialog", "Updates", err))
+                return
+            if info["available"]:
+                self.ui_q.put(("call", lambda: (say("LocalFlow %s is available (you have %s)." % (info["latest"], info["current"])),
+                                                self._offer_update(info))))
+            else:
+                msg = "You're up to date (LocalFlow %s)." % info["current"]
+                self.ui_q.put(("call", lambda: say(msg)))
+                if interactive:
+                    self.ui_q.put(("dialog", "Updates", msg))
+
+        threading.Thread(target=run, daemon=True, name="update-check").start()
+
+    def _offer_update(self, info):
+        from . import update
+
+        if info["kind"] == "source" or not info["asset"]:
+            if messagebox.askyesno("LocalFlow", "LocalFlow %s is available (you have %s).\n\nOpen the download page?"
+                                   % (info["latest"], info["current"]), parent=self.root):
+                import webbrowser
+
+                webbrowser.open(info["page"])
+            return
+        notes = info["notes"].splitlines()
+        summary = "\n".join(line for line in notes[:8] if line.strip())[:600]
+        mac_note = ("\n\nmacOS may ask again for Accessibility and Input Monitoring after the update "
+                    "(until LocalFlow is signed by Apple)." if IS_MAC else "")
+        if not messagebox.askyesno(
+                "Update LocalFlow",
+                "LocalFlow %s is available (you have %s). %.0f MB download.%s\n\n%s\n\nUpdate now? LocalFlow "
+                "restarts when it's done; your settings, history and dictionary are kept."
+                % (info["latest"], info["current"], (info["asset"].get("size") or 0) / 1e6, mac_note, summary),
+                parent=self.root):
+            return
+        self.set_status("Downloading LocalFlow %s…" % info["latest"], warn=True)
+
+        def run():
+            try:
+                done = update.apply(info, lambda msg, frac: self.ui_q.put(("status_warn", "%s %d%%" % (msg, frac * 100))))
+                if done:
+                    self.ui_q.put(("quit",))
+            except Exception as exc:
+                err = "Update failed: %s" % exc
+                self.ui_q.put(("dialog", "Update LocalFlow", err))
+                self.ui_q.put(("status_warn", err))
+
+        threading.Thread(target=run, daemon=True, name="update-apply").start()
 
     def _open_mic(self):
         def run():

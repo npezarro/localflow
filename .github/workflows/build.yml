@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller==6.22.3 pytest
       - name: Unit tests
-        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py
+        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py tests/test_update_import.py
       - name: Fetch bundled model
         run: python scripts/fetch_model.py base.en
       - name: macOS icon
@@ -52,6 +52,52 @@ jobs:
         shell: bash
         run: echo "version=$(python -c 'import localflow; print(localflow.__version__)')" >> "$GITHUB_OUTPUT"
 
+      # ---------------- Code signing (optional; see SIGNING.md) ----------------
+      # Signing turns on when ALL of a platform's secrets are set. None set: builds are
+      # unsigned (mac: ad-hoc + hardened runtime) with a notice. Only some set: fail, so a
+      # half-configured setup can't silently publish unsigned builds.
+      - name: Signing credentials
+        id: sign
+        shell: bash
+        env:
+          AZ_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          AZ_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          AZ_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZ_ENDPOINT: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          AZ_ACCOUNT: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          AZ_PROFILE: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          MAC_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MAC_P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          ASC_KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          check() {  # name, then values
+            local name=$1; shift; local set=0 total=$#
+            for v in "$@"; do [ -n "$v" ] && set=$((set+1)); done
+            if [ "$set" = 0 ]; then echo "::notice::$name signing not configured: building unsigned"; echo "$name=false" >> "$GITHUB_OUTPUT"
+            elif [ "$set" = "$total" ]; then echo "$name signing: all $total secrets present"; echo "$name=true" >> "$GITHUB_OUTPUT"
+            else echo "::error::$name signing is half-configured ($set of $total secrets set); see SIGNING.md"; exit 1; fi
+          }
+          if [ "$RUNNER_OS" = "Windows" ]; then check windows "$AZ_TENANT" "$AZ_CLIENT" "$AZ_SECRET" "$AZ_ENDPOINT" "$AZ_ACCOUNT" "$AZ_PROFILE"; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then check mac "$MAC_P12" "$MAC_P12_PASSWORD" "$ASC_KEY" "$ASC_KEY_ID" "$ASC_ISSUER"; fi
+      - name: Sign app (Windows, Azure Artifact Signing)
+        if: runner.os == 'Windows' && steps.sign.outputs.windows == 'true'
+        uses: azure/artifact-signing-action@v2
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist\LocalFlow
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       # ---------------- Windows: portable zip + installer ----------------
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -69,6 +115,32 @@ jobs:
           & $iscc /Qp "/DAppVersion=${{ steps.ver.outputs.version }}" "/DSourceDir=$PWD\dist\LocalFlow" installer\localflow.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Move-Item dist/LocalFlow-Setup-x64.exe LocalFlow-Setup-x64.exe
+      - name: Sign installer (Windows, Azure Artifact Signing)
+        if: runner.os == 'Windows' && steps.sign.outputs.windows == 'true'
+        uses: azure/artifact-signing-action@v2
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}
+          files-folder-filter: exe
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Verify signature (Windows)
+        if: runner.os == 'Windows' && steps.sign.outputs.windows == 'true'
+        shell: pwsh
+        run: |
+          foreach ($f in @("dist/LocalFlow/LocalFlow.exe", "LocalFlow-Setup-x64.exe")) {
+            $sig = Get-AuthenticodeSignature $f
+            Write-Host "$f : $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne "Valid") { exit 1 }
+          }
       - name: Test portable zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -102,12 +174,82 @@ jobs:
           Start-Sleep -Seconds 3
           if (Test-Path $app) { Write-Error "uninstall left $app"; exit 1 }
           Write-Host "install -> selftest -> uninstall OK"
+      - name: Test in-app update (Windows installer + portable)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $latest = (Invoke-RestMethod https://api.github.com/repos/${{ github.repository }}/releases/latest).tag_name.TrimStart("v")
+          Write-Host "latest release: $latest"
+          function Wait-Version($exe, $want) {
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 5
+              if (Test-Path $exe) {
+                $p = Start-Process -FilePath $exe -ArgumentList "--selftest","--out","$PWD/v.json" -Wait -PassThru
+                if (Test-Path v.json) { $v = (Get-Content v.json | ConvertFrom-Json).version; Remove-Item v.json; if ($v -eq $want) { return $true } }
+              }
+            }
+            return $false
+          }
+          # 1) installed copy: pretend to be 0.0.1, update, expect the latest release installed in place
+          $p = Start-Process -FilePath .\LocalFlow-Setup-x64.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          $app = Join-Path $env:LOCALAPPDATA "Programs\LocalFlow\LocalFlow.exe"
+          New-Item -ItemType Directory -Force (Join-Path $env:LOCALAPPDATA "LocalFlow") | Out-Null
+          "keep me" | Set-Content (Join-Path $env:LOCALAPPDATA "LocalFlow\marker.txt")
+          $env:LOCALFLOW_PRETEND_VERSION = "0.0.1"
+          $p = Start-Process -FilePath $app -ArgumentList "--update-now","$PWD/upd.json" -Wait -PassThru
+          $env:LOCALFLOW_PRETEND_VERSION = $null
+          Get-Content upd.json
+          if (-not (Select-String -Path upd.json -Pattern '"handed_over": true' -Quiet)) { Write-Error "installer update not started"; exit 1 }
+          if (-not (Wait-Version $app $latest)) { Write-Error "installed copy never reached $latest"; exit 1 }
+          if (-not (Test-Path (Join-Path $env:LOCALAPPDATA "LocalFlow\marker.txt"))) { Write-Error "update lost user data"; exit 1 }
+          Get-Process LocalFlow -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Process -FilePath (Join-Path $env:LOCALAPPDATA "Programs\LocalFlow\unins000.exe") -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES" -Wait
+          Write-Host "installer copy updated to $latest, data kept"
+          # 2) portable copy: same, files replaced, data\ untouched
+          Expand-Archive "${{ matrix.artifact }}.zip" -DestinationPath portable-upd
+          $pexe = Resolve-Path portable-upd/LocalFlow/LocalFlow.exe
+          "keep me" | Set-Content portable-upd/LocalFlow/data/marker.txt
+          $env:LOCALFLOW_PRETEND_VERSION = "0.0.1"
+          $p = Start-Process -FilePath $pexe -ArgumentList "--update-now","$PWD/upd2.json" -Wait -PassThru
+          $env:LOCALFLOW_PRETEND_VERSION = $null
+          Get-Content upd2.json
+          if (-not (Wait-Version $pexe $latest)) { Write-Error "portable copy never reached $latest"; exit 1 }
+          if (-not (Test-Path portable-upd/LocalFlow/data/marker.txt)) { Write-Error "update lost the portable data folder"; exit 1 }
+          Get-Process LocalFlow -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Host "portable copy updated to $latest, data kept"
 
       # ---------------- macOS: portable zip + dmg ----------------
       - name: Package (macOS)
         if: runner.os == 'macOS'
+        env:
+          MAC_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MAC_P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          ASC_KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
-          codesign --force --deep --sign - dist/LocalFlow.app
+          if [ "${{ steps.sign.outputs.mac }}" = "true" ]; then
+            kc="$RUNNER_TEMP/signing.keychain-db"; kcpass=$(uuidgen)
+            security create-keychain -p "$kcpass" "$kc"
+            security set-keychain-settings -lut 21600 "$kc"
+            security unlock-keychain -p "$kcpass" "$kc"
+            echo "$MAC_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -P "$MAC_P12_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
+            security set-key-partition-list -S apple-tool:,apple: -k "$kcpass" "$kc" >/dev/null
+            security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+            identity=$(security find-identity -v -p codesigning "$kc" | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"')
+            [ -n "$identity" ] || { echo "::error::no Developer ID Application identity in MACOS_CERT_P12"; exit 1; }
+            echo "$ASC_KEY" | base64 --decode > "$RUNNER_TEMP/asc.p8"
+            notarize() { xcrun notarytool submit "$1" --key "$RUNNER_TEMP/asc.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER" --wait --timeout 30m; }
+          else
+            identity="-"
+          fi
+          scripts/macos_sign.sh "$identity" dist/LocalFlow.app
+          if [ "$identity" != "-" ]; then
+            ditto -c -k --keepParent dist/LocalFlow.app "$RUNNER_TEMP/notarize.zip"
+            notarize "$RUNNER_TEMP/notarize.zip"
+            xcrun stapler staple dist/LocalFlow.app
+          fi
           mkdir -p pkg/LocalFlow/data
           cp -R dist/LocalFlow.app pkg/LocalFlow/
           cp README.md pkg/LocalFlow/README.md
@@ -130,6 +272,12 @@ jobs:
             if [ "$attempt" = 5 ]; then exit 1; fi
             echo "hdiutil busy, retrying ($attempt)"; sleep $((attempt * 5))
           done
+          if [ "$identity" != "-" ]; then
+            codesign --force --timestamp --sign "$identity" "${{ matrix.artifact }}.dmg"
+            notarize "${{ matrix.artifact }}.dmg"
+            xcrun stapler staple "${{ matrix.artifact }}.dmg"
+            spctl -a -vvv -t install "${{ matrix.artifact }}.dmg"
+          fi
       - name: Test portable zip (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 8
@@ -153,6 +301,28 @@ jobs:
           /tmp/LocalFlow.app/Contents/MacOS/LocalFlow --selftest --out "$PWD/installed.json"
           cat installed.json
           python -c "import json,os,sys; d=json.load(open('installed.json'))['data_dir']; sys.exit(0 if d==os.path.expanduser('~/Library/Application Support/LocalFlow') else 'installed app should use Application Support, got '+d)"
+      - name: Test in-app update (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 12
+        run: |
+          latest=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
+          echo "latest release: $latest"
+          ditto -x -k "${{ matrix.artifact }}.zip" mac-upd
+          echo "keep me" > mac-upd/LocalFlow/data/marker.txt
+          app="$PWD/mac-upd/LocalFlow/LocalFlow.app"
+          LOCALFLOW_PRETEND_VERSION=0.0.1 "$app/Contents/MacOS/LocalFlow" --update-now "$PWD/upd.json"
+          cat upd.json; grep -q '"handed_over": true' upd.json
+          for i in $(seq 1 60); do
+            sleep 5
+            if [ -x "$app/Contents/MacOS/LocalFlow" ] && "$app/Contents/MacOS/LocalFlow" --selftest --out "$PWD/v.json" >/dev/null 2>&1; then
+              v=$(python3 -c "import json; print(json.load(open('v.json'))['version'])")
+              [ "$v" = "$latest" ] && break
+            fi
+          done
+          [ "$v" = "$latest" ] || { echo "mac copy never reached $latest (last: $v)"; exit 1; }
+          test -f mac-upd/LocalFlow/data/marker.txt || { echo "update lost the data folder"; exit 1; }
+          pkill -f "LocalFlow.app/Contents/MacOS/LocalFlow" || true
+          echo "mac copy updated to $latest, data kept"
       - name: Show app log
         if: always()
         shell: bash

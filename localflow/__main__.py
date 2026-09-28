@@ -16,6 +16,11 @@ def _setup_logging():
 
 def main():
     _setup_logging()
+    if "--update-now" in sys.argv:  # check + download + hand over to the installer (tests/CI)
+        from .update import run_cli
+
+        i = sys.argv.index("--update-now")
+        return run_cli(sys.argv[i + 1] if len(sys.argv) > i + 1 else None)
     if "--selftest" in sys.argv:
         from .selftest import run
 
