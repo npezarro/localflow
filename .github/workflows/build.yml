@@ -123,7 +123,13 @@ jobs:
              "Open Anyway" next to LocalFlow (or run: xattr -dr com.apple.quarantine /Applications/LocalFlow.app).
           3. Allow Microphone, Accessibility and Input Monitoring when asked, then quit and reopen LocalFlow.
           TXT
-          hdiutil create -volname LocalFlow -srcfolder dmgroot -ov -format UDZO "${{ matrix.artifact }}.dmg"
+          # hdiutil intermittently fails with "Resource busy" on GitHub's macOS runners
+          # (background indexing/scanning holds the files); retry instead of failing the release.
+          for attempt in 1 2 3 4 5; do
+            if hdiutil create -volname LocalFlow -srcfolder dmgroot -ov -format UDZO "${{ matrix.artifact }}.dmg"; then break; fi
+            if [ "$attempt" = 5 ]; then exit 1; fi
+            echo "hdiutil busy, retrying ($attempt)"; sleep $((attempt * 5))
+          done
       - name: Test portable zip (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 8
