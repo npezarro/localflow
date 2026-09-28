@@ -343,12 +343,27 @@ jobs:
             LocalFlow-Setup-x64.exe
           if-no-files-found: ignore
           retention-days: 30
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+
+  # One release, published only after every platform built and passed its tests. Attaching
+  # from each matrix job made the first finished job's partial release "latest" while the
+  # others were still testing updates against "latest" (v0.10.0: 2 of 6 files, 2 jobs failed).
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          fail_on_unmatched_files: false
-          files: |
-            ${{ matrix.artifact }}.zip
-            ${{ matrix.artifact }}.dmg
-            LocalFlow-Setup-x64.exe
+          path: dist
+          merge-multiple: true
+      - name: Check all six files are there
+        run: |
+          ls -la dist
+          for f in LocalFlow-Setup-x64.exe LocalFlow-windows-x64.zip LocalFlow-macos-arm64.zip \
+                   LocalFlow-macos-arm64.dmg LocalFlow-macos-intel.zip LocalFlow-macos-intel.dmg; do
+            test -s "dist/$f" || { echo "missing $f"; exit 1; }
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: dist/*
