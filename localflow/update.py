@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -69,12 +70,47 @@ def asset_name(kind):
 
 
 def latest_release(timeout=20):
-    req = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "LocalFlow"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.load(resp)
-    return {"version": data["tag_name"].lstrip("vV"), "notes": (data.get("body") or "").strip(),
-            "page": data.get("html_url") or RELEASES_PAGE,
-            "assets": {a["name"]: a for a in data.get("assets", [])}}
+    """Latest release info from the GitHub API; if the API refuses (60 unauthenticated
+    requests/hour per IP, easily used up on a shared office/CI network), fall back to the
+    un-rate-limited /releases/latest redirect and the fixed asset names."""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "LocalFlow"}
+    token = os.environ.get("GITHUB_TOKEN")  # set in CI only
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        with urllib.request.urlopen(urllib.request.Request(API, headers=headers), timeout=timeout) as resp:
+            data = json.load(resp)
+        return {"version": data["tag_name"].lstrip("vV"), "notes": (data.get("body") or "").strip(),
+                "page": data.get("html_url") or RELEASES_PAGE,
+                "assets": {a["name"]: a for a in data.get("assets", [])}}
+    except (urllib.error.HTTPError, KeyError) as exc:
+        log.info("GitHub API unavailable (%s); using the releases page", exc)
+    return _latest_from_redirect(timeout)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _latest_from_redirect(timeout=20):
+    opener = urllib.request.build_opener(_NoRedirect)
+    req = urllib.request.Request(RELEASES_PAGE, method="HEAD", headers={"User-Agent": "LocalFlow"})
+    try:
+        opener.open(req, timeout=timeout)
+        raise RuntimeError("GitHub didn't redirect to the latest release")
+    except urllib.error.HTTPError as exc:  # the 302 arrives as an "error" without a redirect handler
+        location = exc.headers.get("Location") or ""
+    tag = location.rstrip("/").rsplit("/", 1)[-1]
+    if "/releases/tag/" not in location or not tag:
+        raise RuntimeError("couldn't read the latest release from GitHub")
+    base = "https://github.com/%s/releases/download/%s/" % (REPO, tag)
+    names = ["LocalFlow-Setup-x64.exe", "LocalFlow-windows-x64.zip",
+             "LocalFlow-macos-arm64.zip", "LocalFlow-macos-intel.zip"]
+    # No published checksum on this path: the download is still HTTPS from github.com and
+    # is checked for completeness against the server's Content-Length.
+    return {"version": tag.lstrip("vV"), "notes": "", "page": location,
+            "assets": {n: {"name": n, "browser_download_url": base + n} for n in names}}
 
 
 def check():
@@ -94,6 +130,7 @@ def download(asset, dest_dir, progress=lambda frac: None):
     req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "LocalFlow"})
     done, total = 0, asset.get("size") or 0
     with urllib.request.urlopen(req, timeout=120) as resp, open(path, "wb") as out:
+        total = total or int(resp.headers.get("Content-Length") or 0)
         while True:
             block = resp.read(1 << 20)
             if not block:

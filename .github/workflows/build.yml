@@ -177,14 +177,17 @@ jobs:
       - name: Test in-app update (Windows installer + portable)
         if: runner.os == 'Windows'
         shell: pwsh
+        timeout-minutes: 15
+        env:
+          GITHUB_TOKEN: ${{ github.token }}  # shared runner IPs exhaust the anonymous API limit
         run: |
-          $latest = (Invoke-RestMethod https://api.github.com/repos/${{ github.repository }}/releases/latest).tag_name.TrimStart("v")
+          $latest = (Invoke-RestMethod -Headers @{Authorization = "Bearer $env:GITHUB_TOKEN"} https://api.github.com/repos/${{ github.repository }}/releases/latest).tag_name.TrimStart("v")
           Write-Host "latest release: $latest"
           function Wait-Version($exe, $want) {
             for ($i = 0; $i -lt 60; $i++) {
               Start-Sleep -Seconds 5
               if (Test-Path $exe) {
-                $p = Start-Process -FilePath $exe -ArgumentList "--selftest","--out","$PWD/v.json" -Wait -PassThru
+                $p = Start-Process -FilePath $exe -ArgumentList "--selftest","--out","$PWD/v.json" -PassThru; $p.WaitForExit()
                 if (Test-Path v.json) { $v = (Get-Content v.json | ConvertFrom-Json).version; Remove-Item v.json; if ($v -eq $want) { return $true } }
               }
             }
@@ -196,7 +199,8 @@ jobs:
           New-Item -ItemType Directory -Force (Join-Path $env:LOCALAPPDATA "LocalFlow") | Out-Null
           "keep me" | Set-Content (Join-Path $env:LOCALAPPDATA "LocalFlow\marker.txt")
           $env:LOCALFLOW_PRETEND_VERSION = "0.0.1"
-          $p = Start-Process -FilePath $app -ArgumentList "--update-now","$PWD/upd.json" -Wait -PassThru
+          # WaitForExit, not -Wait: -Wait also waits for the helper and the relaunched app it starts.
+          $p = Start-Process -FilePath $app -ArgumentList "--update-now","$PWD/upd.json" -PassThru; $p.WaitForExit()
           $env:LOCALFLOW_PRETEND_VERSION = $null
           Get-Content upd.json
           if (-not (Select-String -Path upd.json -Pattern '"handed_over": true' -Quiet)) { Write-Error "installer update not started"; exit 1 }
@@ -210,7 +214,7 @@ jobs:
           $pexe = Resolve-Path portable-upd/LocalFlow/LocalFlow.exe
           "keep me" | Set-Content portable-upd/LocalFlow/data/marker.txt
           $env:LOCALFLOW_PRETEND_VERSION = "0.0.1"
-          $p = Start-Process -FilePath $pexe -ArgumentList "--update-now","$PWD/upd2.json" -Wait -PassThru
+          $p = Start-Process -FilePath $pexe -ArgumentList "--update-now","$PWD/upd2.json" -PassThru; $p.WaitForExit()
           $env:LOCALFLOW_PRETEND_VERSION = $null
           Get-Content upd2.json
           if (-not (Wait-Version $pexe $latest)) { Write-Error "portable copy never reached $latest"; exit 1 }
@@ -304,8 +308,10 @@ jobs:
       - name: Test in-app update (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 12
+        env:
+          GITHUB_TOKEN: ${{ github.token }}  # shared runner IPs exhaust the anonymous API limit
         run: |
-          latest=$(curl -s https://api.github.com/repos/${{ github.repository }}/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
+          latest=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
           echo "latest release: $latest"
           ditto -x -k "${{ matrix.artifact }}.zip" mac-upd
           echo "keep me" > mac-upd/LocalFlow/data/marker.txt
