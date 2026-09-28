@@ -49,7 +49,7 @@ def test_download_verifies_github_checksum(server, tmp_path):
 
 def test_portable_script_never_touches_data():
     script = update.portable_script(r"C:\t\new\LocalFlow", r"D:\Apps\LocalFlow", 1234, r"D:\Apps\LocalFlow\LocalFlow.exe")
-    assert "/XD data" in script and 'PID eq 1234' in script and "start" in script
+    assert "/XD data" in script and "Wait-Process -Id 1234" in script and "Start-Process" in script
     mac = update.mac_script("/tmp/x/LocalFlow.app", "/Applications/LocalFlow.app", 99)
     assert "kill -0 99" in mac and 'open "/Applications/LocalFlow.app"' in mac
 

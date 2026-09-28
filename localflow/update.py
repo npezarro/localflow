@@ -112,26 +112,33 @@ def download(asset, dest_dir, progress=lambda frac: None):
     return path
 
 
-def _spawn_detached(cmd):
+def _spawn_detached(cmd, console=False):
+    """Start a process that outlives LocalFlow. ``console``: it runs console tools (the
+    PowerShell helper), so give it a hidden console instead of none at all."""
     kwargs = {"close_fds": True}
     if IS_WIN:
-        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED | NEW_GROUP | NO_WINDOW
+        NEW_GROUP, NO_WINDOW, DETACHED = 0x00000200, 0x08000000, 0x00000008
+        kwargs["creationflags"] = NEW_GROUP | (NO_WINDOW if console else DETACHED)
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(cmd, **kwargs)
 
 
-def portable_script(new_root, app_root, pid, exe):
-    """Windows helper: wait for LocalFlow to exit, copy the new files over (never data\\), restart."""
-    return "\r\n".join([
-        "@echo off",
-        ":wait",
-        'tasklist /FI "PID eq %d" 2>NUL | find "%d" >NUL && (timeout /t 1 /nobreak >NUL & goto wait)' % (pid, pid),
-        'robocopy "%s" "%s" /E /XD data /R:3 /W:1 /NFL /NDL /NJH /NJS >NUL' % (new_root, app_root),
-        'start "" "%s"' % exe,
-        'rmdir /S /Q "%s" 2>NUL' % os.path.dirname(new_root),
-        "",
-    ])
+def portable_script(new_root, app_root, pid, exe, work_dir=None):
+    """Windows helper (PowerShell): wait for LocalFlow to exit, copy the new files over
+    (never data\\), restart. PowerShell's Wait-Process needs no console; the first version
+    was a .cmd whose tasklist/timeout calls hang when started without a console."""
+    q = lambda p: "'" + p.replace("'", "''") + "'"  # noqa: E731  (PowerShell single-quoted string)
+    lines = [
+        "$ErrorActionPreference = 'SilentlyContinue'",
+        "Wait-Process -Id %d -Timeout 180" % pid,
+        "Start-Sleep -Milliseconds 700",
+        "robocopy %s %s /E /XD data /R:5 /W:1 /NFL /NDL /NJH /NJS | Out-Null" % (q(new_root), q(app_root)),
+        "Start-Process -FilePath %s" % q(exe),
+    ]
+    if work_dir:
+        lines.append("Remove-Item -Recurse -Force %s" % q(work_dir))
+    return "\r\n".join(lines) + "\r\n"
 
 
 def mac_script(new_app, app_path, pid):
@@ -165,10 +172,11 @@ def apply(info, progress=lambda msg, frac: None):
             z.extractall(extracted)
         new_root = os.path.join(extracted, "LocalFlow")
         app_root = paths.install_root()
-        script = os.path.join(work, "apply-update.cmd")
-        with open(script, "w") as f:
-            f.write(portable_script(new_root, app_root, pid, os.path.join(app_root, "LocalFlow.exe")))
-        _spawn_detached(["cmd.exe", "/c", script])
+        script = os.path.join(work, "apply-update.ps1")
+        with open(script, "w", encoding="utf-8-sig") as f:
+            f.write(portable_script(new_root, app_root, pid, os.path.join(app_root, "LocalFlow.exe"), work))
+        _spawn_detached(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                         "-File", script], console=True)
         return True
     if kind == "mac":
         extracted = os.path.join(work, "new")
