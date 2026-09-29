@@ -122,3 +122,15 @@ def test_user_keys_ignore_localflow_hotkeys():
     # ...anything else does, so an in-place correction won't undo over the user's edits.
     for name in ("a", "backspace", "left", "enter", "z"):
         assert not listener._is_hotkey_key(name), name
+
+
+def test_terminal_detection_for_in_place_fixes():
+    from localflow.apps import is_terminal
+
+    # A console window counts as a terminal whatever program owns it.
+    assert is_terminal({"id": "myscript.exe", "exe": "myscript.exe", "window_class": "ConsoleWindowClass"})
+    assert is_terminal({"id": "windowsterminal.exe", "exe": "WindowsTerminal.exe", "window_class": "x"})
+    assert is_terminal({"id": "com.googlecode.iterm2", "exe": "iTerm2"})
+    assert not is_terminal({"id": "notepad.exe", "exe": "notepad.exe", "window_class": "Notepad"})
+    assert not is_terminal({"id": "com.apple.TextEdit", "exe": "TextEdit"})
+    assert not is_terminal(None)

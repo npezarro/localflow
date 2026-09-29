@@ -35,7 +35,31 @@ def _windows_foreground():
         if kernel32.QueryFullProcessImageNameW(ctypes.c_void_p(handle), 0, buf, ctypes.byref(size)):
             exe = os.path.basename(buf.value)
         kernel32.CloseHandle(ctypes.c_void_p(handle))
-    return {"name": exe or title.value, "exe": exe, "title": title.value, "id": exe.lower()}
+    cls = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(ctypes.c_void_p(hwnd), cls, 256)
+    return {"name": exe or title.value, "exe": exe, "title": title.value, "id": exe.lower(),
+            "window_class": cls.value}
+
+
+# Terminal windows, whatever program runs inside them: Ctrl+Z there suspends or sends EOF
+# instead of undoing, so LocalFlow never does an undo + paste into one.
+TERMINAL_WINDOW_CLASSES = {"consolewindowclass", "cascadia_hosting_window_class", "mintty",
+                           "virtualconsoleclass", "puttyconfigbox", "putty"}
+TERMINAL_APPS = {"windowsterminal", "cmd", "powershell", "pwsh", "conhost", "wsl", "mintty", "alacritty",
+                 "wezterm", "wezterm-gui", "kitty", "putty", "termius", "tabby", "hyper", "warp",
+                 "com.apple.terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty",
+                 "org.alacritty", "com.github.wez.wezterm", "dev.warp.warp-stable", "co.zeit.hyper",
+                 "com.termius-dmg.mac"}
+
+
+def is_terminal(app):
+    if not app:
+        return False
+    if (app.get("window_class") or "").lower() in TERMINAL_WINDOW_CLASSES:
+        return True
+    ids = {os.path.splitext((app.get(k) or "").lower())[0] for k in ("id", "exe")}
+    ids |= {(app.get("id") or "").lower()}
+    return bool(ids & TERMINAL_APPS)
 
 
 def _mac_foreground():

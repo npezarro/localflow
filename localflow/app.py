@@ -245,7 +245,12 @@ class App:
 
     def show_window(self):
         self.root.deiconify()
+        if self.root.state() == "iconic":
+            self.root.state("normal")
         self.root.lift()
+        # Briefly topmost so Windows brings it over whatever is in front, then back to normal.
+        self.root.attributes("-topmost", True)
+        self.root.after(300, lambda: self.root.attributes("-topmost", False))
         self.root.focus_force()
         if self.pending_setup:
             self.open_setup(reason=self.pending_setup)
@@ -491,10 +496,6 @@ class App:
                 self.ui_q.put(("error", "Transcription failed: %s" % exc))
 
     # ------------------------------------------------------------------ spoken corrections
-    # Terminals treat Ctrl+Z as "suspend", so an in-place fix there would do damage.
-    NO_UNDO_APPS = ("windowsterminal", "cmd", "powershell", "pwsh", "conhost", "wsl", "mintty",
-                    "alacritty", "wezterm", "com.apple.terminal", "com.googlecode.iterm2", "kitty")
-
     def _note_paste(self, item_id):
         self.last_paste = {"id": item_id, "app": apps.foreground(), "t": time.monotonic(),
                            "keys": self.listener.user_keys if self.listener else -1}
@@ -508,8 +509,7 @@ class App:
         if not now or not lp["app"] or now.get("id") != lp["app"].get("id") or \
                 now.get("title") != lp["app"].get("title"):
             return False
-        app_id = os.path.splitext((now.get("id") or "").lower())[0]
-        if app_id in self.NO_UNDO_APPS:
+        if apps.is_terminal(now):  # Ctrl+Z suspends there instead of undoing
             return False
         return lp["keys"] == self.listener.user_keys and time.monotonic() - lp["t"] < 180
 
@@ -1236,21 +1236,63 @@ def _single_instance():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
-        sock.listen(1)
+        sock.listen(4)
         return sock
     except OSError:
         return None
 
 
+def _serve_show_requests(guard, app):
+    """The running copy: a second launch asks it to come to the front instead of starting."""
+    def run():
+        while True:
+            try:
+                conn, _addr = guard.accept()
+            except OSError:
+                return  # closed on exit
+            try:
+                conn.settimeout(2)
+                if conn.recv(16).strip() == b"show":
+                    app.ui_q.put(("show",))
+                    conn.sendall(b"ok\n")
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+    threading.Thread(target=run, daemon=True, name="single-instance").start()
+
+
+def _ask_running_copy_to_show():
+    """-> True if an already running LocalFlow answered and is bringing its window up."""
+    if IS_WIN:
+        try:  # we were just launched by the user, so we may hand them the right to take focus
+            import ctypes
+
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+        except Exception:
+            pass
+    try:
+        with socket.create_connection(("127.0.0.1", SINGLE_INSTANCE_PORT), timeout=3) as conn:
+            conn.sendall(b"show\n")
+            conn.settimeout(3)
+            return conn.recv(8).startswith(b"ok")
+    except OSError:
+        return False
+
+
 def main():
     guard = _single_instance()
     if guard is None:
+        if _ask_running_copy_to_show():
+            return 0
         root = tk.Tk()
         root.withdraw()
         messagebox.showinfo("LocalFlow", "LocalFlow is already running.")
         return 1
     log.info("LocalFlow %s starting; data dir %s", __version__, paths.data_dir())
     app = App()
+    _serve_show_requests(guard, app)
     if "--smoke-ui" in sys.argv:
         _smoke(app)
     app.run()
