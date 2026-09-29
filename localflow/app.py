@@ -17,6 +17,7 @@ from .indicator import Indicator
 from .learn import Learner
 from .live import LiveSession
 from .settings_ui import SettingsPanel
+from . import quick_menu
 from .setup_ui import SetupDialog
 from .chunked import ChunkedTranscription
 from .transcriber import Transcriber, is_local, speech_in, speech_regions
@@ -116,6 +117,11 @@ class App:
         self.status_var = tk.StringVar(value="Starting…")
         ttk.Label(top, textvariable=self.status_var, font=("TkDefaultFont", 11, "bold")).pack(
             side="left", padx=8)
+        quick = ttk.Menubutton(top, text="Quick settings")
+        quick_menu_ = tk.Menu(quick, tearoff=False, postcommand=lambda: quick_menu.build(self, quick_menu_))
+        quick.configure(menu=quick_menu_)
+        quick.pack(side="right")
+        self.quick_menu = quick_menu_
         self.hint_var = tk.StringVar()
         ttk.Label(root, textvariable=self.hint_var, foreground="#666", padding=(px(36), 0, px(14), px(6)),
                   wraplength=px(640)).pack(fill="x")
@@ -223,6 +229,8 @@ class App:
             pystray.MenuItem("Live typing", lambda: self.ui_q.put(("toggle_live",)),
                              checked=lambda _item: bool(self.cfg["live_typing"])),
             pystray.MenuItem("Set up AI clean-up…", lambda: self.ui_q.put(("setup",))),
+            pystray.MenuItem("Check for updates…",
+                             lambda: self.ui_q.put(("call", lambda: self.check_for_updates(True, self.set_status)))),
             pystray.MenuItem("Quit", lambda: self.ui_q.put(("quit",))))
         self.tray = pystray.Icon("LocalFlow", img, "LocalFlow", menu)
         self.tray.run_detached()
@@ -933,6 +941,13 @@ class App:
             self.refresh_history()
 
     # ------------------------------------------------------------------ settings
+    def quick_set(self, key, value):
+        """A change from the quick menu or tray: save now, keep the Settings form in step."""
+        if self.cfg.get(key) == value:
+            return
+        self.apply_settings(dict(self.cfg, **{key: value}))
+        self.settings.reflect(key)
+
     def apply_settings(self, new):
         model_changed = new["model"] != self.cfg["model"] or new.get("device") != self.cfg.get("device")
         polish_changed = new["polish"] != self.cfg["polish"]

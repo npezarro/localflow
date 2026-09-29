@@ -88,6 +88,8 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 
 *Settings → Words → Learned* lists everything it has picked up, with *Forget selected* / *Forget all*, and a checkbox to turn learning off. Your own Vocabulary and Replacements always win over learned ones. It learns from transcripts, not from edits you make afterwards in other apps.
 
+**Quick settings** (top right of the window): the everyday switches without scrolling through Settings: always-on live listening, live typing, hold vs toggle, model, speed, microphone, AI clean-up provider, paste / sounds / filler removal / learning / in-place corrections, plus paste last, test microphone, check for updates, back up, and open the data folder. Changes there save immediately; the tray icon menu (Windows) has the most-used ones too.
+
 **Settings tab:** changes take effect when you press **Save** (bottom of the tab, always visible). Leaving the tab or closing the window with unsaved changes asks whether to save them; **Revert** discards them.
 
 - **Dictation:** hotkey (type a combo like `ctrl+cmd`, `alt_r`, `ctrl+shift+space`, or click *Record…* and press it; `cmd` is the Windows key on Windows), mode (`hold` push-to-talk or `toggle`), the paste-last hotkey, and **Keep listening after release** (0-3 s, default 0.3): how long the mic stays open after you let go of the hotkey, so a trailing word isn't cut off. The pill keeps showing the live waveform until it closes.

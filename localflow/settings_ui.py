@@ -465,27 +465,34 @@ class SettingsPanel:
         self.dirty_var.set(message)
         self.dirty_label.configure(foreground=MUTED)
 
+    def _display(self, key, cfg):
+        """cfg value -> what the form widget for ``key`` shows."""
+        if key == "engine":
+            return _label_for(ENGINES, cfg["engine"])
+        if key == "polish":
+            return _label_for(POLISH, cfg["polish"])
+        if key == "type_into":
+            return _label_for(TYPE_INTO, cfg["type_into"])
+        if key == "device":
+            return _label_for(DEVICES, cfg["device"])
+        if key == "beam_size":
+            return _label_for(BEAMS, 1 if int(cfg["beam_size"]) <= 1 else 5)
+        if key == "input_device":
+            return next((n for i, n in self.app.devices if i == cfg["input_device"]), self.device_names[0])
+        if isinstance(self.vars[key], tk.BooleanVar):
+            return bool(cfg[key])
+        return "" if cfg[key] is None else str(cfg[key])
+
+    def reflect(self, key):
+        """Show a value changed elsewhere (quick menu, tray) without touching other unsaved edits."""
+        if key in self.vars:
+            self.set_quietly(key, self._display(key, self.app.cfg))
+
     def load(self, cfg):
         self._loading = True
         try:
             for key, var in self.vars.items():
-                if key == "engine":
-                    var.set(_label_for(ENGINES, cfg["engine"]))
-                elif key == "polish":
-                    var.set(_label_for(POLISH, cfg["polish"]))
-                elif key == "type_into":
-                    var.set(_label_for(TYPE_INTO, cfg["type_into"]))
-                elif key == "device":
-                    var.set(_label_for(DEVICES, cfg["device"]))
-                elif key == "beam_size":
-                    var.set(_label_for(BEAMS, 1 if int(cfg["beam_size"]) <= 1 else 5))
-                elif key == "input_device":
-                    var.set(next((n for i, n in self.app.devices if i == cfg["input_device"]),
-                                 self.device_names[0]))
-                elif isinstance(var, tk.BooleanVar):
-                    var.set(bool(cfg[key]))
-                else:
-                    var.set("" if cfg[key] is None else str(cfg[key]))
+                var.set(self._display(key, cfg))
             for key, var in self.key_vars.items():
                 var.set(keystore.get(key))
             for widget, value in ((self.vocab_text, "\n".join(cfg["vocabulary"])),
