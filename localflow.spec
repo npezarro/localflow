@@ -19,6 +19,12 @@ datas = collect_data_files("faster_whisper") + [
 binaries = collect_dynamic_libs("ctranslate2") + collect_dynamic_libs("onnxruntime")
 if IS_WIN:
     hidden = ["pynput.keyboard._win32", "pynput.mouse._win32", "pystray._win32"]
+    # UI Automation wrappers (learning from edits): generate them now so the packaged app
+    # never has to write generated code at run time.
+    import comtypes.client
+    comtypes.client.GetModule("UIAutomationCore.dll")
+    from PyInstaller.utils.hooks import collect_submodules
+    hidden += ["comtypes.client", "comtypes.stream"] + collect_submodules("comtypes.gen")
 elif IS_MAC:
     hidden = ["pynput.keyboard._darwin", "pynput.mouse._darwin", "AppKit", "Quartz",
               "ApplicationServices"]

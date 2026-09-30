@@ -14,6 +14,9 @@ ACCEPT_INJECTED = os.environ.get("LOCALFLOW_ACCEPT_INJECTED") == "1"
 DEBUG_KEYS = os.environ.get("LOCALFLOW_DEBUG_KEYS") == "1"
 log = logging.getLogger(__name__)
 MASK_KEY = "vk232"  # the key we tap to stop Win from opening Start; never part of a chord
+# Health probe (Windows): an unassigned virtual key we send to ourselves, tagged so we can
+# recognise it and swallow it before any app sees it.
+PROBE_VK, PROBE_TAG = 0x97, 0x4C47
 
 IDLE, HOLDING, LOCKED, BLOCKED = "idle", "holding", "locked", "blocked"
 
@@ -190,6 +193,70 @@ class HotkeyListener:
         self._swallowed = set()  # keys of a fired one-shot hotkey, kept out of the focused app
         self._mac_swallow = False
         self.user_keys = 0  # presses of keys that aren't part of any LocalFlow hotkey
+        self.last_probe_seen = 0.0
+        self._tap_disabled = False
+        self._vk_of = {}  # key name -> Windows virtual-key / macOS key code, to ask the OS if it's down
+        self.last_event = time.monotonic()
+
+    def stale_keys(self):
+        """Keys we think are held but aren't: their release happened where we can't see it
+        (lock screen, Ctrl+Alt+Del, an admin prompt). One stale key makes the exact-match
+        hotkey never fire again, which looks like "the hotkey stopped working"."""
+        pressed = set(self.machine.pressed)
+        if not pressed:
+            return []
+        stale = []
+        try:
+            if sys.platform == "win32":
+                import ctypes
+
+                down = ctypes.windll.user32.GetAsyncKeyState
+                down.restype = ctypes.c_short
+                stale = [k for k in pressed if k in self._vk_of and not down(self._vk_of[k]) & 0x8000]
+            elif sys.platform == "darwin":
+                import Quartz
+
+                stale = [k for k in pressed if k in self._vk_of and not Quartz.CGEventSourceKeyState(
+                    Quartz.kCGEventSourceStateHIDSystemState, self._vk_of[k])]
+        except Exception:
+            pass
+        # Keys the OS can't be asked about: "held" with no keyboard activity for a while,
+        # outside a dictation, means a release we missed.
+        if self.machine.state in (IDLE, BLOCKED) and time.monotonic() - self.last_event > 5:
+            stale += [k for k in pressed if k not in self._vk_of and k not in stale]
+        return sorted(stale)
+
+    def clear_stale(self):
+        keys = self.stale_keys()
+        for key in keys:
+            self.machine.release(key)  # exactly what a seen release would have done
+        if keys:
+            self._oneshot_fired = {c for c in self._oneshot_fired
+                                   if any(token_matches(t, k) for t in c for k in self.machine.pressed)}
+            if not self.machine.pressed:
+                self._swallowed.clear()
+        return keys
+
+    def healthy(self, wait=1.5):
+        """Is the OS still delivering keys to us? Windows silently removes a keyboard hook
+        that once answered too slowly (e.g. while a transcription kept Python busy), and
+        macOS disables a slow event tap, which stops pynput for good. Either way the hotkeys
+        go dead with no error, until the listener is recreated."""
+        if not self._listener or not self._listener.is_alive() or self._tap_disabled:
+            return False
+        if sys.platform != "win32":
+            return True
+        import ctypes
+
+        sent = time.monotonic()
+        ctypes.windll.user32.keybd_event(PROBE_VK, 0, 0, PROBE_TAG)
+        ctypes.windll.user32.keybd_event(PROBE_VK, 0, 2, PROBE_TAG)
+        deadline = sent + wait
+        while time.monotonic() < deadline:
+            if self.last_probe_seen >= sent:
+                return True
+            time.sleep(0.05)
+        return False
 
     def _is_hotkey_key(self, name):
         combos = list(self.oneshots) + [self.machine.combo, {self.machine.lock_key, "esc"}]
@@ -225,6 +292,9 @@ class HotkeyListener:
 
     # --- suppression of the hands-free lock key -------------------------------------
     def _win_filter(self, msg, data):
+        if data.dwExtraInfo == PROBE_TAG:  # our own health probe: note it, keep it from every app
+            self.last_probe_seen = time.monotonic()
+            self._listener.suppress_event()
         if data.dwExtraInfo == 0x4C46:  # typed by LocalFlow itself (typer.TAG): not the user
             return False
         injected = bool(data.flags & 0x10)
@@ -259,6 +329,9 @@ class HotkeyListener:
         try:
             import Quartz
 
+            if event_type in (0xFFFFFFFE, 0xFFFFFFFF):  # tap disabled by timeout / user input
+                self._tap_disabled = True
+                return event
             code = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
             if event_type == Quartz.kCGEventKeyDown and self._mac_swallow:
                 self._mac_swallow = False  # a one-shot hotkey just fired on this key
@@ -283,10 +356,16 @@ class HotkeyListener:
         name = key_name(key)
         if not name or name == MASK_KEY:
             return
+        self.last_event = time.monotonic()
+        vk = getattr(key, "vk", None) or getattr(getattr(key, "value", None), "vk", None)
+        if vk is not None:
+            self._vk_of[name] = vk  # Windows virtual-key / macOS key code, to ask the OS later
         if self._capture:
             self._capture[1].add(name)
             self._capture[2].add(name)
             return
+        if self.machine.pressed - {name} and sys.platform in ("win32", "darwin"):
+            self.clear_stale()  # a key still "held" from before may have been released unseen
         self.machine.press(name)
         if not self._is_hotkey_key(name):
             self.user_keys += 1
@@ -305,6 +384,7 @@ class HotkeyListener:
         name = key_name(key)
         if not name or name == MASK_KEY:
             return
+        self.last_event = time.monotonic()
         if self._capture:
             callback, seen, down = self._capture
             down.discard(name)

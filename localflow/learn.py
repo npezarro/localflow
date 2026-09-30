@@ -73,8 +73,11 @@ class Learner:
             self._save()
         return promoted
 
-    def learn_correction(self, original, corrected, is_uncommon=lambda w: True):
-        """Diff the transcript you fixed against what was typed. Returns [(wrong, right)]."""
+    def learn_correction(self, original, corrected, is_uncommon=lambda w: True, confirm_after=1):
+        """Diff the transcript you fixed against what was typed. Returns the [(wrong, right)]
+        pairs now in effect. ``confirm_after``: how many times the same fix must be seen before
+        it applies (1 for an explicit correction; 2 for an edit made in another app, which may
+        be a change of mind rather than a mishearing)."""
         a, b = original.split(), corrected.split()
         norm = lambda ws: [w.lower().strip(".,!?;:\"()[]") for w in ws]  # noqa: E731
         learned = []
@@ -87,8 +90,14 @@ class Learner:
                     continue
                 rep = self.data["replacements"].setdefault(wrong.lower(), {"to": right, "count": 0,
                                                                            "enabled": True})
+                if rep["to"].lower() != right.lower():
+                    rep["count"] = 0  # a different fix than before: start counting again
+                    rep.pop("needs", None)
                 rep.update(to=right, enabled=True)
                 rep["count"] += 1
+                rep["needs"] = min(rep.get("needs", confirm_after), confirm_after)
+                if rep["count"] < rep["needs"]:
+                    continue  # pending: seen once in an app edit
                 learned.append((wrong, right))
                 for word in right.split():
                     if len(word) >= 3 and is_uncommon(word):
@@ -106,7 +115,8 @@ class Learner:
         return [t["term"] for t in terms[:limit]]
 
     def replacements(self):
-        return {wrong: r["to"] for wrong, r in self.data["replacements"].items() if r.get("enabled", True)}
+        return {wrong: r["to"] for wrong, r in self.data["replacements"].items()
+                if r.get("enabled", True) and r["count"] >= r.get("needs", 1)}
 
     def apply_to(self, cfg):
         """cfg with learned vocabulary/replacements merged in (your own entries win)."""
@@ -125,8 +135,13 @@ class Learner:
         """Rows for the Settings list: (kind, key, label)."""
         rows = []
         for wrong, r in sorted(self.data["replacements"].items(), key=lambda kv: -kv[1]["count"]):
-            if r.get("enabled", True):
+            if not r.get("enabled", True):
+                continue
+            if r["count"] >= r.get("needs", 1):
                 rows.append(("replacement", wrong, "“%s” → “%s”  (your correction)" % (wrong, r["to"])))
+            else:
+                rows.append(("replacement", wrong, "“%s” → “%s”  (pending: seen once in an edit; "
+                                                   "learned if you make it again)" % (wrong, r["to"])))
         for key, t in sorted(self.data["terms"].items(), key=lambda kv: -kv[1]["count"]):
             if not t.get("enabled", True):
                 continue

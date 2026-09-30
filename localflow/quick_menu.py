@@ -64,6 +64,7 @@ def build(app, menu):
     check("Start/stop sounds", "sounds")
     check("Remove filler words (um, uh)", "remove_fillers")
     check("Learn from my corrections", "learn")
+    check("Learn from my edits after pasting", "learn_from_edits")
     check("Fix voice corrections in place", "feedback_fix_in_place")
     menu.add_separator()
 
@@ -71,6 +72,8 @@ def build(app, menu):
     menu.add_command(label="Paste last transcript", accelerator=fmt(cfg["paste_last_hotkey"]),
                      command=lambda: app.ctl_q.put(("paste_last",)))
     menu.add_command(label="Test microphone", command=app.test_microphone)
+    menu.add_command(label="Restart hotkeys & microphone", command=lambda: app.restart_hotkeys(True))
+    menu.add_command(label="Restart LocalFlow", command=app.restart_app)
     menu.add_command(label="Check for updates…", command=lambda: app.check_for_updates(True, app.set_status))
     menu.add_command(label="Back up my data…", command=app.settings.backup)
     menu.add_command(label="Open data folder", command=app.settings.open_data)

@@ -9,7 +9,7 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-from . import __version__, apps, audio, config, feedback, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
+from . import __version__, apps, audio, config, edits, feedback, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
 from .history import History
 from .dictionary import Dictionary
 from .dictionary_ui import DictionaryTab
@@ -54,6 +54,7 @@ class App:
         self.continuous = False  # always-on live listening (pause/resume hotkey)
         self.correcting = None  # {"item", "started"} while recording a spoken correction
         self.last_paste = None  # where the last transcript was pasted, for an in-place correction
+        self.edit_watch = edits.EditWatcher(self._learn_from_edit)
         self._blocked_notice = None
         self.record_started = 0.0
         self.polish_failures = 0
@@ -87,6 +88,8 @@ class App:
         self.load_model(self.cfg["model"])
         self.listener = None
         self.start_listener()
+        self.hotkey_reconnects = 0
+        threading.Thread(target=self._hotkey_watchdog, daemon=True, name="hotkey-watchdog").start()
         self._open_mic()
         self.root.after(40, self._poll)
         self.root.after(1200, self._maybe_setup)
@@ -229,6 +232,9 @@ class App:
             pystray.MenuItem("Live typing", lambda: self.ui_q.put(("toggle_live",)),
                              checked=lambda _item: bool(self.cfg["live_typing"])),
             pystray.MenuItem("Set up AI clean-up…", lambda: self.ui_q.put(("setup",))),
+            pystray.MenuItem("Restart hotkeys & microphone",
+                             lambda: self.ui_q.put(("call", lambda: self.restart_hotkeys(True)))),
+            pystray.MenuItem("Restart LocalFlow", lambda: self.ui_q.put(("call", self.restart_app))),
             pystray.MenuItem("Check for updates…",
                              lambda: self.ui_q.put(("call", lambda: self.check_for_updates(True, self.set_status)))),
             pystray.MenuItem("Quit", lambda: self.ui_q.put(("quit",))))
@@ -325,6 +331,62 @@ class App:
         self.listener = hotkey.HotkeyListener(machine, oneshots)
         self.listener.start()
 
+    def _hotkey_watchdog(self, tick=2.0, probe_every=20):
+        """Keep the hotkeys alive without a Settings save: forget keys whose release we never
+        saw (stuck keys stop the hotkey matching), and reconnect if the OS stopped sending us
+        keys at all."""
+        since_probe = 0.0
+        while True:
+            time.sleep(tick)
+            since_probe += tick
+            lst = self.listener
+            if not lst or lst._capture:
+                continue
+            try:
+                stuck = lst.clear_stale()
+            except Exception:
+                log.exception("stuck-key check failed")
+                stuck = []
+            if stuck:
+                log.warning("cleared stuck key(s) %s: their release was never seen (lock screen, "
+                            "Ctrl+Alt+Del or an admin prompt?)", ", ".join(stuck))
+            if since_probe < probe_every or lst.machine.state != hotkey.IDLE or lst.machine.pressed:
+                continue  # probe only when idle and no keys are held
+            since_probe = 0.0
+            try:
+                # A busy moment can delay the answer; only a second, longer miss means dead.
+                ok = lst.healthy() or lst.healthy(wait=4)
+            except Exception:
+                log.exception("hotkey health check failed")
+                continue
+            if not ok and lst is self.listener:
+                self.hotkey_reconnects += 1
+                log.warning("hotkeys stopped responding; reconnecting (#%d this session)", self.hotkey_reconnects)
+                self.ui_q.put(("call", self.restart_hotkeys))
+
+    def restart_hotkeys(self, announce=False):
+        """Recreate the keyboard listener and reopen the microphone (what saving Settings did)."""
+        self.start_listener()
+        self._open_mic()
+        if announce:
+            self.set_status("Hotkeys and microphone restarted")
+            self.show_overlay("message", "Hotkeys and microphone restarted")
+
+    def restart_app(self):
+        """Start a fresh copy of LocalFlow, then quit this one."""
+        if not self.settings.confirm_leave():
+            return
+        from . import update
+
+        cmd = [sys.executable] if paths.is_frozen() else [sys.executable, os.path.abspath(sys.argv[0])]
+        env_key = "LOCALFLOW_RESTART_FROM"
+        os.environ[env_key] = str(os.getpid())  # the new copy waits for this one to exit
+        try:
+            update._spawn_detached(cmd)
+        finally:
+            os.environ.pop(env_key, None)
+        self.quit()
+
     def capture_hotkey(self, var):
         var.set("press keys…")
 
@@ -355,6 +417,7 @@ class App:
                 if cmd == "start":
                     if self.recorder.active:
                         continue
+                    self.edit_watch.stop()  # a new dictation: finish learning from the last one
                     apps.remember(apps.foreground())
                     if IS_WIN and "cmd" in hotkey.parse_combo(self.cfg["hotkey"]):
                         platform_fix.mask_windows_key()
@@ -482,7 +545,7 @@ class App:
                 if self._may_type():
                     self.paster.deliver(text, self.cfg["auto_paste"], self.cfg["restore_clipboard"])
                     if self.cfg["auto_paste"]:
-                        self._note_paste(item["id"])
+                        self._note_paste(item["id"], text)
                 else:
                     output.set_clipboard(text)  # still on the clipboard and in history
                 self.ui_q.put(("transcript", item))
@@ -496,9 +559,35 @@ class App:
                 self.ui_q.put(("error", "Transcription failed: %s" % exc))
 
     # ------------------------------------------------------------------ spoken corrections
-    def _note_paste(self, item_id):
-        self.last_paste = {"id": item_id, "app": apps.foreground(), "t": time.monotonic(),
+    def _note_paste(self, item_id, text=None):
+        app = apps.foreground()
+        self.last_paste = {"id": item_id, "app": app, "t": time.monotonic(),
                            "keys": self.listener.user_keys if self.listener else -1}
+        if text:
+            self._watch_edits(item_id, text, app)
+
+    def _watch_edits(self, item_id, text, app=None):
+        """Keep an eye on the field we just wrote into, to learn from the user's fixes."""
+        app = app or apps.foreground()
+        if self.cfg.get("learn") and self.cfg.get("learn_from_edits") and not apps.is_terminal(app):
+            self.edit_watch.watch(item_id, text)
+
+    def _learn_from_edit(self, item_id, old, new):
+        """Runs on the watcher thread: the user changed our words in the app; learn it."""
+        item = next((i for i in self.history.items if i["id"] == item_id), None)
+        if not item:
+            return
+        new_text = new + (" " if item["text"].endswith(" ") else "")
+        self.history.update(item_id, text=new_text, original=item.get("original", item["text"]),
+                            edited_in_app=True)
+        # An edit may be a change of mind, not a mishearing: it becomes a rule on the 2nd time.
+        learned = self.learner.learn_correction(old, new, self.transcriber.is_uncommon, confirm_after=2) \
+            if self.cfg.get("learn") else []
+        pairs = learned or edits.words_changed(old, new)
+        shown = "; ".join("“%s” → “%s”" % p for p in pairs[:3])
+        msg = ("Learned from your edit: " + shown) if learned else \
+            ("Noted your edit (%s); it's learned if you make the same fix again" % shown)
+        self.ui_q.put(("edit_learned", msg, True))
 
     def _can_fix_in_place(self, item):
         """Undo + paste is only safe right after our own paste, in the same app, with no typing since."""
@@ -586,7 +675,7 @@ class App:
         self._wait_for_keys_up()
         if self._can_fix_in_place(item) and self._may_type(notify=False):
             self.paster.undo_and_paste(new)
-            self._note_paste(item["id"])
+            self._note_paste(item["id"], new)
             where = "Fixed"
         else:
             output.set_clipboard(new)
@@ -740,6 +829,7 @@ class App:
             self.ui_q.put(("idle",))
             return
         item = self.history.add(text, seconds, "live:%s" % self.transcriber.model_name)
+        self._watch_edits(item["id"], text)
         self.ui_q.put(("transcript", item))
         self._learn_from(text)
 
@@ -786,6 +876,11 @@ class App:
             self.show_overlay("correcting", "")
             self.set_status("Say the correction, then press %s again"
                             % hotkey.format_combo(self.cfg["feedback_hotkey"]))
+        elif kind == "edit_learned":  # quiet: just the status line, no pill minutes after pasting
+            self.set_status(ev[1])
+            self.refresh_history()
+            if ev[2]:
+                self.settings.refresh_learned()
         elif kind == "corrected":
             self.show_overlay("message", ev[1][:70])
             self.set_status(ev[1])
@@ -1283,6 +1378,12 @@ def _ask_running_copy_to_show():
 
 def main():
     guard = _single_instance()
+    if guard is None and os.environ.get("LOCALFLOW_RESTART_FROM"):
+        deadline = time.monotonic() + 20  # restarting: wait for the old copy to let go
+        while guard is None and time.monotonic() < deadline:
+            time.sleep(0.25)
+            guard = _single_instance()
+    os.environ.pop("LOCALFLOW_RESTART_FROM", None)
     if guard is None:
         if _ask_running_copy_to_show():
             return 0

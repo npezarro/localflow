@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller==6.22.3 pytest
       - name: Unit tests
-        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py tests/test_update_import.py tests/test_feedback.py
+        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py tests/test_update_import.py tests/test_feedback.py tests/test_edits.py
       - name: Fetch bundled model
         run: python scripts/fetch_model.py base.en
       - name: macOS icon

@@ -86,6 +86,8 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 - **Your corrections.** When you fix a transcript and press *Save correction*, it compares the two and learns what it misheard ("Kabir nets" → "Kubernetes"): the pair becomes a replacement and the corrected word a spelling hint, from the very next dictation. The hint alone is usually enough for Whisper to spell the word right in new sentences too.
 - **Words you repeat.** Uncommon words (names, jargon, product terms: anything Whisper's tokenizer splits into several pieces) are counted per dictation; once one has come up in 3 dictations it's fed to Whisper as a spelling hint automatically.
 
+- **Edits you make after pasting.** For 3 minutes after a transcript lands in a text field, LocalFlow reads that one field (UI Automation on Windows, Accessibility on macOS; never password fields or terminals) and notices if you change its words. The change updates Transcripts, and once you've made the same fix twice it's learned like a correction (once could just be a change of mind). Turn it off in *Quick settings* or *Settings → Words*.
+
 *Settings → Words → Learned* lists everything it has picked up, with *Forget selected* / *Forget all*, and a checkbox to turn learning off. Your own Vocabulary and Replacements always win over learned ones. It learns from transcripts, not from edits you make afterwards in other apps.
 
 **Quick settings** (top right of the window): the everyday switches without scrolling through Settings: always-on live listening, live typing, hold vs toggle, model, speed, microphone, AI clean-up provider, paste / sounds / filler removal / learning / in-place corrections, plus paste last, test microphone, check for updates, back up, and open the data folder. Changes there save immediately; the tray icon menu (Windows) has the most-used ones too.
@@ -173,6 +175,8 @@ For the portable copy, move or copy the folder and everything comes with it; del
 Same core loop: hold-to-talk, hands-free lock, floating waveform pill, paste into any app, history, dictionary/snippets, optional AI formatting. Differences: no "command mode" (editing selected text by voice) or per-app tone styles yet, and on Mac the default hotkey is Control+Option because the Fn key is not reliably visible to apps without a kernel-level helper.
 
 ## Troubleshooting
+
+- **Hotkey stopped responding:** LocalFlow now repairs this by itself: every couple of seconds it checks that the keys it thinks are held really are (a key released on the lock screen, at Ctrl+Alt+Del or in an admin prompt is never seen and used to block the hotkey), and it reconnects if the system stops sending it keys. If it still happens, *Quick settings → Restart hotkeys & microphone* (or *Restart LocalFlow*), also in the tray menu.
 
 - **Words missing or wrong:** run *Settings → Test microphone*. A low peak means the wrong input or a muted mic. Keep *Keep the microphone ready* on so the first word isn't clipped. Add names to *Vocabulary*. For the best accuracy switch the engine to Groq, or the local model to `small.en` / `large-v3-turbo`. `data/localflow.log` records each dictation's length, level, engine and timing, and `data/last-recording.wav` is exactly what was transcribed.
 - **Claude/ChatGPT clean-up fails:** press *Test clean-up*; it lists every install it tried and why each failed (for example "Not logged in"). Sign in with `claude` or `codex login`, or put a working command in *Claude command* / *Codex command*.

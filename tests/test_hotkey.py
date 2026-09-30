@@ -134,3 +134,21 @@ def test_terminal_detection_for_in_place_fixes():
     assert not is_terminal({"id": "notepad.exe", "exe": "notepad.exe", "window_class": "Notepad"})
     assert not is_terminal({"id": "com.apple.TextEdit", "exe": "TextEdit"})
     assert not is_terminal(None)
+
+
+def test_stuck_key_is_forgotten_so_the_hotkey_matches_again(monkeypatch):
+    import localflow.hotkey as hk
+
+    monkeypatch.setattr(hk.sys, "platform", "darwin")  # the no-OS-query path
+    started = []
+    listener = hk.HotkeyListener(HotkeyMachine("f9", on_start=lambda: started.append(1),
+                                               on_stop=lambda: None, on_cancel=lambda: None))
+    m = listener.machine
+    m.press("cmd_l")  # its release happened on the lock screen: never seen
+    m.press("f9")
+    assert not started  # {cmd_l, f9} != {f9}: the hotkey looks dead
+    m.release("f9")
+    listener.last_event -= 10
+    assert listener.clear_stale() == ["cmd_l"]
+    m.press("f9")
+    assert started

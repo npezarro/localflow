@@ -55,3 +55,18 @@ def test_forget_is_sticky_and_state_persists(learner, tmp_path):
     assert again.vocabulary() == [] and "zorblax" in again.data["terms"]
     again.clear()
     assert learn.Learner().entries() == []
+
+
+def test_an_edit_in_an_app_needs_the_same_fix_twice(tmp_path, monkeypatch):
+    from localflow import learn, paths
+
+    monkeypatch.setattr(paths, "data_dir", lambda: str(tmp_path))
+    lr = learn.Learner()
+    t = "Please ask Maria to send it"
+    assert lr.learn_correction(t, t.replace("Maria", "Priya"), confirm_after=2) == []
+    assert "maria" not in lr.replacements()  # once could be a change of mind
+    assert any("pending" in row[2] for row in lr.entries())
+    assert lr.learn_correction(t, t.replace("Maria", "Priya"), confirm_after=2) == [("Maria", "Priya")]
+    assert lr.replacements()["maria"] == "Priya"
+    # an explicit correction still applies at once
+    assert lr.learn_correction("the sigma file", "the Figma file") == [("sigma", "Figma")]

@@ -62,6 +62,7 @@ DEFAULTS = {
     "min_hold_seconds": 0.3,
     "release_tail": 0.3,  # seconds the mic stays open after you let go of the hotkey
     "preroll": 0.5,  # seconds kept from just before the hotkey (needs warm_mic)
+    "learn_from_edits": True,  # learn when you edit a transcript right after it's pasted (reads that field only)
     "learn": True,  # learn names/jargon you repeat and the corrections you make (data/learned.json)
     "vocabulary": [],  # words/names Whisper should spell your way
     "replacements": {},  # spoken -> written, e.g. {"new line": "\n"}
