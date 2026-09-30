@@ -30,6 +30,9 @@ IS_WIN = sys.platform == "win32"
 SINGLE_INSTANCE_PORT = 47219
 
 RED = "#ff5a5f"
+ROW_COLOURS = {"unchanged": "#dcf3df", "corrected": "#fff1b8", "changed": "#ffdcc7"}
+IN_APP_TEXT = {"watching": "watching for edits…", "unreadable": "(this app doesn't expose its text)",
+               "removed": "(deleted or moved)", "stale": "(not checked)"}
 
 
 class App:
@@ -160,14 +163,25 @@ class App:
         ttk.Button(bar, text="Delete", command=self.delete_selected).pack(side="left", padx=4)
         ttk.Button(bar, text="Clear all", command=self.clear_history).pack(side="left")
 
+        key = ttk.Frame(parent)
+        key.pack(fill="x", pady=(6, 0))
+        for status, label in (("unchanged", "left as dictated"), ("corrected", "you corrected it (learned)"),
+                              ("changed", "you rewrote it (not learned)")):
+            tk.Label(key, text=" %s " % label, background=ROW_COLOURS[status], foreground="#1d1f23",
+                     font=("TkDefaultFont", 8)).pack(side="left", padx=(0, 6))
         pane = ttk.PanedWindow(parent, orient="vertical")
-        pane.pack(fill="both", expand=True, pady=(8, 0))
+        pane.pack(fill="both", expand=True, pady=(6, 0))
         frame = ttk.Frame(pane)
-        self.tree = ttk.Treeview(frame, columns=("when", "text"), show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(frame, columns=("when", "text", "in_app"), show="headings", selectmode="browse")
         self.tree.heading("when", text="When")
         self.tree.heading("text", text="Transcript (double-click to copy)")
-        self.tree.column("when", width=px(140), stretch=False)
-        self.tree.column("text", width=px(500))
+        self.tree.heading("in_app", text="In the app afterwards")
+        self.tree.column("when", width=px(110), stretch=False)
+        self.tree.column("text", width=px(330))
+        self.tree.column("in_app", width=px(330))
+        # Row colour = what happened to the transcript in the app you pasted it into.
+        for tag, colour in ROW_COLOURS.items():
+            self.tree.tag_configure(tag, background=colour, foreground="#1d1f23")
         sb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -570,6 +584,7 @@ class App:
         """Keep an eye on the field we just wrote into, to learn from the user's fixes."""
         app = app or apps.foreground()
         if self.cfg.get("learn") and self.cfg.get("learn_from_edits") and not apps.is_terminal(app):
+            self.history.update(item_id, in_app={"status": "watching", "app": apps.label(app), "at": time.time()})
             self.edit_watch.watch(item_id, text, apps.label(app))
 
     def _edit_watch_result(self, item_id, old, status, final, app_name):
@@ -581,8 +596,7 @@ class App:
         in_app = {"status": status, "final": final, "app": app_name or "", "at": time.time()}
         if status != "corrected":
             self.history.update(item_id, in_app=in_app)
-            if status in ("changed", "removed"):
-                self.ui_q.put(("call", self.refresh_history))
+            self.ui_q.put(("call", self.refresh_history))
             return
         new = final
         new_text = new + (" " if item["text"].endswith(" ") else "")
@@ -972,14 +986,18 @@ class App:
         q = self.search_var.get().lower().strip() if hasattr(self, "search_var") else ""
         self.tree.delete(*self.tree.get_children())
         for item in reversed(self.history.items):
-            if q and q not in item["text"].lower():
+            ia = item.get("in_app") or {}
+            status = ia.get("status", "")
+            if status == "watching" and time.time() - ia.get("at", 0) > edits.WATCH_SECONDS + 60:
+                status = "stale"  # LocalFlow closed while it was watching
+            # Left: what LocalFlow wrote. Right: what it looked like in the app at the end.
+            wrote = item.get("original") if item.get("edited_in_app") else item["text"]
+            after = ia.get("final") if status in ("unchanged", "corrected", "changed") else IN_APP_TEXT.get(status, "")
+            if q and q not in (wrote + " " + (after or "")).lower():
                 continue
             when = datetime.fromtimestamp(item["ts"]).strftime("%b %d %H:%M")
-            if item.get("edited_in_app"):
-                when += "  ✎"  # you corrected it in the app (learned)
-            elif (item.get("in_app") or {}).get("status") == "changed":
-                when += "  ≠"  # you rewrote it in the app (not learned)
-            self.tree.insert("", "end", iid=item["id"], values=(when, item["text"].replace("\n", " ⏎ ")))
+            self.tree.insert("", "end", iid=item["id"], tags=(status,) if status in ROW_COLOURS else (),
+                             values=(when, wrote.replace("\n", " ⏎ "), (after or "").replace("\n", " ⏎ ")))
 
     def _selected(self):
         sel = self.tree.selection()
