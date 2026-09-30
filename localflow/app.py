@@ -9,7 +9,7 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-from . import __version__, apps, audio, config, edits, feedback, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
+from . import __version__, apps, audio, config, drive, edits, feedback, google_auth, sync, hotkey, keystore, output, paths, pipeline, platform_fix, polish, typer
 from .history import History
 from .dictionary import Dictionary
 from .dictionary_ui import DictionaryTab
@@ -60,6 +60,8 @@ class App:
         self.correcting = None  # {"item", "started"} while recording a spoken correction
         self.last_paste = None  # where the last transcript was pasted, for an in-place correction
         self.edit_watch = edits.EditWatcher(self._edit_watch_result)
+        self.account_sync = sync.Sync(self, lambda: drive.AppFolder(google_auth.Session.shared().token))
+        self._hook_sync()
         self._blocked_notice = None
         self.record_started = 0.0
         self.polish_failures = 0
@@ -99,6 +101,7 @@ class App:
         self.root.after(40, self._poll)
         self.root.after(1200, self._maybe_setup)
         self.root.after(4000, self._startup_update_check)
+        self.account_sync.start()
         if self.cfg["live_autostart"]:
             self.root.after(1500, lambda: self.ctl_q.put(("continuous",)))
         if IS_MAC and not platform_fix.macos_accessibility_trusted(prompt=True):
@@ -737,6 +740,101 @@ class App:
         result = pipeline.process(samples, cfg, self.transcriber)
         return heard, word.lower() in result["text"].lower()
 
+    # ------------------------------------------------------------------ account
+    def _hook_sync(self):
+        self.learner.on_change = self.account_sync.mark_dirty
+        self.dictionary.on_change = self.account_sync.mark_dirty
+
+    def account_ready(self):
+        return bool(self.cfg.get("sync_enabled", True)) and google_auth.available() and google_auth.signed_in()
+
+    def sign_in_google(self):
+        self.set_status("Finish signing in with Google in your browser…", warn=True)
+
+        def run():
+            try:
+                email = google_auth.sign_in()
+            except Exception as exc:
+                msg = "Google sign-in failed: %s" % exc
+                self.ui_q.put(("call", lambda: (self.set_status(msg, warn=True), self.settings.refresh_account())))
+                return
+            self.cfg["account_email"] = email
+            config.save(self.cfg)
+            error = self.account_sync.sync_now()
+            self.ui_q.put(("call", lambda: self._after_sign_in(email, error)))
+
+        threading.Thread(target=run, daemon=True, name="google-sign-in").start()
+
+    def _after_sign_in(self, email, error):
+        self.show_window()
+        self.settings.refresh_account()
+        self.dictionary_tab.refresh()
+        self.set_status("Signed in as %s%s" % (email, " · sync problem: %s" % error if error else " · synced"),
+                        warn=bool(error))
+        if not error and self.account_sync.remote_devices and not self.cfg.get("copied_settings_once"):
+            self.cfg["copied_settings_once"] = True
+            config.save(self.cfg)
+            if messagebox.askyesno("LocalFlow", "Your account has settings from %d other device(s). "
+                                   "Copy one's settings to this computer?" % len(self.account_sync.remote_devices),
+                                   parent=self.root):
+                self.copy_settings_dialog()
+
+    def sign_out_google(self):
+        if not messagebox.askyesno("LocalFlow", "Sign out? Your learnings and dictionary stay on this computer "
+                                   "and in your account; they just stop syncing here.", parent=self.root):
+            return
+        google_auth.sign_out()
+        self.cfg["account_email"] = ""
+        config.save(self.cfg)
+        self.settings.refresh_account()
+        self.set_status("Signed out of Google")
+
+    def sync_now_ui(self):
+        self.set_status("Syncing…")
+
+        def run():
+            error = self.account_sync.sync_now()
+            self.ui_q.put(("call", lambda: (self.settings.refresh_account(), self.dictionary_tab.refresh(),
+                                            self.set_status("Sync problem: %s" % error if error else "Synced",
+                                                            warn=bool(error)))))
+
+        threading.Thread(target=run, daemon=True, name="sync-now").start()
+
+    def copy_settings_dialog(self):
+        devices = self.account_sync.remote_devices
+        if not devices:
+            messagebox.showinfo("LocalFlow", "No other devices have synced to your account yet. Sign in on "
+                                "another computer first.", parent=self.root)
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Copy settings from another device")
+        win.transient(self.root)
+        ttk.Label(win, padding=(12, 10, 12, 4), wraplength=px(420), justify="left",
+                  text="Replace this computer's settings with another device's. Its microphone, processor "
+                       "and tool paths aren't copied; hotkeys are only copied between the same kind of "
+                       "computer (Windows or Mac). Your API keys stay where they are.").pack(fill="x")
+        choice = tk.IntVar(value=0)
+        for i, d in enumerate(devices):
+            when = time.strftime("%b %d %H:%M", time.localtime(d.get("updated", 0)))
+            ttk.Radiobutton(win, variable=choice, value=i,
+                            text="%s · %s · LocalFlow %s · last seen %s" % (d.get("name", "?"), d.get("platform", "?"),
+                                                                          d.get("version", "?"), when)
+                            ).pack(anchor="w", padx=16, pady=2)
+
+        def copy():
+            d = devices[choice.get()]
+            new, skipped = sync.settings_to_copy(d.get("settings") or {}, d.get("platform"), self.cfg)
+            win.destroy()
+            self.apply_settings(new)
+            self.settings.load(self.cfg)
+            note = " (hotkeys kept: that's a %s)" % d.get("platform") if skipped else ""
+            self.set_status("Copied settings from %s%s" % (d.get("name", "that device"), note))
+
+        row = ttk.Frame(win, padding=12)
+        row.pack(fill="x")
+        ttk.Button(row, text="Copy settings", command=copy).pack(side="right")
+        ttk.Button(row, text="Cancel", command=win.destroy).pack(side="right", padx=6)
+
     # ------------------------------------------------------------------ backup
     def reload_data(self):
         """After a restore: re-read everything from the data folder."""
@@ -745,6 +843,7 @@ class App:
         self.history = History(self.cfg["history_limit"])
         self.learner = Learner()
         self.dictionary.reload()
+        self._hook_sync()
         self.settings.load(self.cfg)
         self.refresh_history()
         self.dictionary_tab.refresh()

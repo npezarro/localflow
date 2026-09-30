@@ -74,6 +74,10 @@ def build(app, menu):
     menu.add_command(label="Test microphone", command=app.test_microphone)
     menu.add_command(label="Restart hotkeys & microphone", command=lambda: app.restart_hotkeys(True))
     menu.add_command(label="Restart LocalFlow", command=app.restart_app)
+    from . import google_auth
+
+    if google_auth.available() and google_auth.signed_in():
+        menu.add_command(label="Sync my account now", command=app.sync_now_ui)
     menu.add_command(label="Check for updates…", command=lambda: app.check_for_updates(True, app.set_status))
     menu.add_command(label="Back up my data…", command=app.settings.backup)
     menu.add_command(label="Open data folder", command=app.settings.open_data)

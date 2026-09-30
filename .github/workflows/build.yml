@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller==6.22.3 pytest
       - name: Unit tests
-        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py tests/test_update_import.py tests/test_feedback.py tests/test_edits.py
+        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py tests/test_update_import.py tests/test_feedback.py tests/test_edits.py tests/test_sync.py
       - name: Fetch bundled model
         run: python scripts/fetch_model.py base.en
       - name: macOS icon
@@ -45,6 +45,20 @@ jobs:
             sips -z $((s*2)) $((s*2)) assets/icon.png --out build/icon.iconset/icon_${s}x${s}@2x.png >/dev/null
           done
           iconutil -c icns build/icon.iconset -o build/icon.icns
+      - name: Google sign-in client (optional)
+        # Account sync needs a Google OAuth "Desktop app" client. It comes from repository
+        # secrets so it never sits in the source; without them the build just has no sign-in.
+        shell: bash
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.LOCALFLOW_GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.LOCALFLOW_GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_ID" ] && [ -n "$GOOGLE_CLIENT_SECRET" ]; then
+            python -c "import os; open('localflow/_oauth_client.py','w').write('CLIENT_ID = %r\nCLIENT_SECRET = %r\n' % (os.environ['GOOGLE_CLIENT_ID'], os.environ['GOOGLE_CLIENT_SECRET']))"
+            echo "Google sign-in: configured"
+          else
+            echo "::notice::No Google sign-in client secrets set; building without account sync."
+          fi
       - name: Build
         run: pyinstaller --noconfirm --clean localflow.spec
       - name: Version

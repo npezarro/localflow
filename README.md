@@ -149,6 +149,10 @@ Every local pass costs about the same whether it's 2 or 25 seconds of audio (Whi
 
 Neither Anthropic nor OpenAI offers speech-to-text on a subscription login. Claude's dictation only exists inside Claude Code, and ChatGPT's transcription endpoint is private and requires impersonating OpenAI's own apps, which LocalFlow deliberately doesn't do. Online transcription therefore uses an API key (Groq's free tier covers normal dictation use), while the clean-up pass can use your Claude or ChatGPT subscription through their official command-line tools.
 
+## Account sync
+
+*Settings → Account → Sign in with Google* on each computer you use. Your learned words and corrections and your pronunciation dictionary (with its recordings) then stay in step everywhere, kept in a hidden LocalFlow folder in your own Google Drive (LocalFlow can see only that folder, nothing else in your Drive). Settings stay per device, because a laptop and a desktop often want different microphones, models or hotkeys; on a new computer, *Copy settings from another device…* brings another device's settings over (minus its microphone, processor and tool paths, and minus hotkeys when copying between Windows and Mac). Transcripts never leave the computer they were made on. Sync runs in the background every few minutes and shortly after anything is learned; *Sync now* is in the Account box and *Quick settings*. (Project owners: see `ACCOUNT.md` to set up the Google sign-in client.)
+
 ## Your data
 
 The installed app keeps its files in `%LOCALAPPDATA%\LocalFlow` (Windows) or `~/Library/Application Support/LocalFlow` (Mac). The portable zip keeps them in the `data` folder next to the app:

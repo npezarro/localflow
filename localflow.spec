@@ -31,6 +31,9 @@ elif IS_MAC:
 else:
     hidden = ["pynput.keyboard._xorg", "pynput.mouse._xorg"]
 
+if os.path.exists(os.path.join(SPECPATH, "localflow", "_oauth_client.py")):  # noqa: F821
+    hidden.append("localflow._oauth_client")  # Google sign-in client, generated in CI
+
 a = Analysis(
     ["run_localflow.py"],
     binaries=binaries,

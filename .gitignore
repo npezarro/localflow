@@ -11,3 +11,6 @@ data/
 # internal working notes (kept locally, not published)
 context.md
 progress.md
+
+# generated at build time from repository secrets (Google sign-in client)
+localflow/_oauth_client.py

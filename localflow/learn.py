@@ -25,6 +25,44 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z0-9'’\-]{2,}")
 _STOP = {"the", "and", "you", "that", "with", "this", "have", "from", "they", "what", "there"}
 
 
+TOMBSTONE_DAYS = 180
+
+
+def _empty():
+    return {"terms": {}, "replacements": {}, "deleted": {"terms": {}, "replacements": {}}}
+
+
+def _deleted_tables(data):
+    d = data.get("deleted") or {}
+    return {"terms": dict(d.get("terms") or {}), "replacements": dict(d.get("replacements") or {})}
+
+
+def merge_learned(local, remote):
+    """Merge two learned.json dicts (this device's and the account copy). Per entry the most
+    recently changed version wins; deletions win over older entries; repetition counts of
+    words heard in dictation take the higher count."""
+    out = _empty()
+    now = time.time()
+    for table in ("terms", "replacements"):
+        dl, dr = _deleted_tables(local)[table], _deleted_tables(remote)[table]
+        deleted = {k: max(dl.get(k, 0), dr.get(k, 0)) for k in set(dl) | set(dr)}
+        la, ra = local.get(table) or {}, remote.get(table) or {}
+        for key in set(la) | set(ra):
+            a, b = la.get(key), ra.get(key)
+            if a is None or b is None:
+                best = dict(a or b)
+            else:
+                best = dict(a if a.get("t", 0) >= b.get("t", 0) else b)
+                if table == "terms" and best.get("source", "heard") == "heard":
+                    best["count"] = max(a.get("count", 0), b.get("count", 0))
+            if deleted.get(key, 0) >= best.get("t", 0) and key in deleted:
+                continue  # forgotten after this version was learned
+            out[table][key] = best
+        out["deleted"][table] = {k: t for k, t in deleted.items()
+                                 if k not in out[table] and now - t < TOMBSTONE_DAYS * 86400}
+    return out
+
+
 def _clean_phrase(words):
     return " ".join(w.strip(".,!?;:\"()[]") for w in words).strip()
 
@@ -33,20 +71,39 @@ class Learner:
     def __init__(self):
         self.path = os.path.join(paths.data_dir(), "learned.json")
         self._lock = threading.Lock()
-        self.data = {"terms": {}, "replacements": {}}
+        self.data = _empty()
+        self.on_change = None  # called after every save (account sync schedules an upload)
         try:
             with open(self.path, encoding="utf-8") as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict):
                 self.data.update({k: loaded.get(k, {}) for k in ("terms", "replacements")})
+                self.data["deleted"] = _deleted_tables(loaded)
         except (OSError, ValueError):
             pass
 
-    def _save(self):
+    def _forget(self, table, key):
+        """Delete an entry and leave a dated marker, so a synced copy doesn't bring it back."""
+        self.data[table].pop(key, None)
+        self.data["deleted"][table][key] = time.time()
+
+    def merge_from(self, remote):
+        """Account sync: fold another device's learned.json into ours. Returns the merged data."""
+        with self._lock:
+            self.data = merge_learned(self.data, remote)
+            self._save(notify=False)
+            return json.loads(json.dumps(self.data))
+
+    def _save(self, notify=True):
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=1, ensure_ascii=False)
         os.replace(tmp, self.path)
+        if notify and self.on_change:
+            try:
+                self.on_change()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ learning
     def observe(self, text, is_uncommon):
@@ -65,7 +122,7 @@ class Learner:
                 entry = self.data["terms"].setdefault(key, {"term": word, "count": 0, "source": "heard",
                                                             "enabled": True})
                 entry["count"] += 1
-                entry["last"] = time.time()
+                entry["last"] = entry["t"] = time.time()
                 if word[:1].isupper():
                     entry["term"] = word  # prefer the capitalised spelling of names
                 if entry["count"] == PROMOTE_AT:
@@ -103,15 +160,16 @@ class Learner:
                 if not rep or rep["to"].lower() != right.lower():
                     continue
                 rep["count"] -= 1
+                rep["t"] = time.time()
                 if rep["count"] <= 0:
-                    del reps[wrong.lower()]
+                    self._forget("replacements", wrong.lower())
                 undone.append((wrong, right))
                 still_used = {w.lower() for r in reps.values() if r["count"] >= r.get("needs", 1)
                               for w in r["to"].split()}
                 for word in right.split():
                     term = self.data["terms"].get(word.lower())
                     if term and term.get("source") == "correction" and word.lower() not in still_used:
-                        del self.data["terms"][word.lower()]
+                        self._forget("terms", word.lower())
             self._save()
         return undone
 
@@ -128,7 +186,7 @@ class Learner:
                 if rep["to"].lower() != right.lower():
                     rep["count"] = 0  # a different fix than before: start counting again
                     rep.pop("needs", None)
-                rep.update(to=right, enabled=True)
+                rep.update(to=right, enabled=True, t=time.time())
                 rep["count"] += 1
                 rep["needs"] = min(rep.get("needs", confirm_after), confirm_after)
                 if rep["count"] < rep["needs"]:
@@ -137,7 +195,7 @@ class Learner:
                 for word in right.split():
                     if len(word) >= 3 and is_uncommon(word):
                         term = self.data["terms"].setdefault(word.lower(), {"term": word, "count": 0})
-                        term.update(term=word, source="correction", enabled=True)
+                        term.update(term=word, source="correction", enabled=True, t=time.time())
                         term["count"] = max(term["count"], PROMOTE_AT)
             self._save()
         return learned
@@ -192,9 +250,12 @@ class Learner:
             table = self.data["replacements" if kind == "replacement" else "terms"]
             if key in table:
                 table[key]["enabled"] = False
+                table[key]["t"] = time.time()
                 self._save()
 
     def clear(self):
         with self._lock:
-            self.data = {"terms": {}, "replacements": {}}
+            for table in ("terms", "replacements"):
+                for key in list(self.data[table]):
+                    self._forget(table, key)
             self._save()

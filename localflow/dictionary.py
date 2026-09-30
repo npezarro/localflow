@@ -12,6 +12,7 @@ recordings are kept so "Re-check" can re-derive the hearings after a model or en
 change without re-recording. A hearing made only of common words ("sigma" for "Figma")
 starts disabled, because replacing it would rewrite every real use of that word.
 """
+import hashlib
 import json
 import os
 import re
@@ -62,6 +63,7 @@ class Dictionary:
         os.makedirs(self.root, exist_ok=True)
         self._lock = threading.Lock()
         self.entries = {}
+        self.on_change = None  # account sync schedules an upload
         self.reload()
 
     # ------------------------------------------------------------------ storage
@@ -78,7 +80,86 @@ class Dictionary:
                 continue
         self.entries = entries
 
-    def _save(self, entry):
+    # ------------------------------------------------------------------ account sync
+    def _deleted_path(self):
+        return os.path.join(self.root, ".deleted.json")
+
+    def deleted(self):
+        try:
+            with open(self._deleted_path(), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _mark_deleted(self, key, when=None):
+        d = self.deleted()
+        d[key] = when or time.time()
+        with open(self._deleted_path(), "w", encoding="utf-8") as f:
+            json.dump(d, f)
+
+    def export_state(self):
+        """{word_key: entry} with a content hash per take (files are synced by hash)."""
+        with self._lock:
+            out = {}
+            for key, entry in self.entries.items():
+                changed = False
+                for take in entry["takes"]:
+                    if "h" not in take:
+                        path = os.path.join(entry["_dir"], "take-%d.wav" % take["n"])
+                        try:
+                            with open(path, "rb") as f:
+                                take["h"] = hashlib.sha1(f.read()).hexdigest()[:16]
+                            changed = True
+                        except OSError:
+                            continue
+                if changed:
+                    self._save(entry, stamp=False)
+                out[key] = {k: v for k, v in entry.items() if not k.startswith("_")}
+                out[key]["takes"] = [dict(t) for t in entry["takes"] if "h" in t]
+            return out
+
+    def take_file(self, key, h):
+        entry = self.entries.get(key)
+        take = next((t for t in (entry or {}).get("takes", []) if t.get("h") == h), None)
+        return os.path.join(entry["_dir"], "take-%d.wav" % take["n"]) if take else None
+
+    def apply_remote(self, key, remote, fetch):
+        """Make our entry for ``key`` match the account's copy; ``fetch(hash) -> wav bytes``."""
+        with self._lock:
+            entry = self._entry(remote["word"])
+            have = {t.get("h"): t for t in entry["takes"] if t.get("h")}
+            takes = []
+            for rt in remote.get("takes", []):
+                local = have.pop(rt["h"], None)
+                if local is None:
+                    n = 1 + max([t["n"] for t in entry["takes"] + takes] or [0])
+                    with open(os.path.join(entry["_dir"], "take-%d.wav" % n), "wb") as f:
+                        f.write(fetch(rt["h"]))
+                    local = {"n": n}
+                local.update(h=rt["h"], heard=rt.get("heard", ""), at=rt.get("at", 0))
+                takes.append(local)
+            for gone in have.values():  # takes deleted on another device
+                try:
+                    os.remove(os.path.join(entry["_dir"], "take-%d.wav" % gone["n"]))
+                except OSError:
+                    pass
+            entry.update(word=remote["word"], disabled=list(remote.get("disabled", [])), takes=takes,
+                         t=remote.get("t", time.time()), created=remote.get("created", entry.get("created")))
+            self._save(entry, stamp=False)
+
+    def remove_synced(self, key, when):
+        """Another device deleted this word."""
+        with self._lock:
+            entry = self.entries.pop(key, None)
+            if entry:
+                shutil.rmtree(entry["_dir"], ignore_errors=True)
+            self._mark_deleted(key, when)
+
+    def _save(self, entry, stamp=True):
+        if stamp:
+            entry["t"] = time.time()  # last change, for account sync (newest version wins)
+            if self.on_change:
+                self.on_change()
         data = {k: v for k, v in entry.items() if not k.startswith("_")}
         tmp = os.path.join(entry["_dir"], "entry.json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
@@ -145,6 +226,9 @@ class Dictionary:
             entry = self.entries.pop(word.lower(), None)
             if entry:
                 shutil.rmtree(entry["_dir"], ignore_errors=True)
+                self._mark_deleted(word.lower())
+                if self.on_change:
+                    self.on_change()
 
     def set_variant(self, word, heard, enabled):
         with self._lock:

@@ -3,6 +3,7 @@ tracking (the app asks before you leave the tab or close the window)."""
 import os
 import subprocess
 import sys
+import time
 import tkinter as tk
 import webbrowser
 from tkinter import messagebox, ttk
@@ -317,6 +318,17 @@ class SettingsPanel:
         ttk.Button(f, text="Add", command=self._add_seen).pack(side="left", padx=4)
         self._row(s, "Apps you've dictated into", f)
 
+        s = self._section("Account")
+        self.account_frame = ttk.Frame(s)
+        self.account_frame.grid(row=s._row, column=0, columnspan=2, sticky="ew")
+        s._row += 1
+        self._row(s, "This device's name", ttk.Entry(s, textvariable=self._var("device_name"), width=30),
+                  "Shown when another device copies settings. Blank = this computer's name.")
+        ttk.Checkbutton(s, text="Sync my learnings and dictionary while signed in",
+                        variable=self._var("sync_enabled", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
+        s._row += 1
+        self.refresh_account()
+
         s = self._section("Your data")
         ttk.Label(s, foreground=MUTED, wraplength=px(560), justify="left",
                   text="Settings, transcripts, learned words and your pronunciation dictionary (with its "
@@ -439,6 +451,43 @@ class SettingsPanel:
         if messagebox.askyesno("LocalFlow", "Remove GPU support? LocalFlow will use the CPU."):
             gpu.remove()
             self.app.load_model(self.app.cfg["model"])
+
+    def refresh_account(self):
+        """Rebuild the Account box for the current sign-in state."""
+        from . import google_auth
+
+        f = self.account_frame
+        for child in f.winfo_children():
+            child.destroy()
+        app = self.app
+        if not google_auth.available():
+            ttk.Label(f, foreground=MUTED, wraplength=px(560), justify="left",
+                      text="This copy of LocalFlow was built without Google sign-in, so account sync "
+                           "isn't available.").pack(anchor="w")
+            return
+        if not google_auth.signed_in():
+            ttk.Button(f, text="Sign in with Google…", command=app.sign_in_google).pack(anchor="w")
+            ttk.Label(f, foreground=MUTED, wraplength=px(560), justify="left",
+                      text="Sign in on each computer to keep your learned words, corrections and "
+                           "pronunciation dictionary in step. They're stored in a hidden LocalFlow folder in "
+                           "your own Google Drive (LocalFlow can see only that folder). Settings stay per "
+                           "device (you can copy them to a new one). Transcripts never leave this computer."
+                      ).pack(anchor="w", pady=(4, 0))
+            return
+        sync = app.account_sync
+        when = ("never" if not sync.last_sync else
+                time.strftime("%H:%M", time.localtime(sync.last_sync)))
+        status = "Signed in as %s · last synced %s" % (app.cfg.get("account_email") or "your Google account", when)
+        if sync.last_error:
+            status += " · problem: " + sync.last_error[:90]
+        ttk.Label(f, text=status, wraplength=px(560), justify="left",
+                  foreground="#b5651d" if sync.last_error else "").pack(anchor="w")
+        row = ttk.Frame(f)
+        row.pack(anchor="w", pady=(4, 0))
+        ttk.Button(row, text="Sync now", command=app.sync_now_ui).pack(side="left")
+        ttk.Button(row, text="Copy settings from another device…",
+                   command=app.copy_settings_dialog).pack(side="left", padx=6)
+        ttk.Button(row, text="Sign out", command=app.sign_out_google).pack(side="left")
 
     def refresh_learned(self):
         self._learned_rows = self.app.learner.entries()

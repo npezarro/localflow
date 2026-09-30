@@ -62,6 +62,11 @@ DEFAULTS = {
     "min_hold_seconds": 0.3,
     "release_tail": 0.3,  # seconds the mic stays open after you let go of the hotkey
     "preroll": 0.5,  # seconds kept from just before the hotkey (needs warm_mic)
+    # Account sync (Google sign-in): learnings + dictionary follow you; settings stay per device
+    "account_email": "",
+    "sync_enabled": True,
+    "device_name": "",  # blank = computer name
+    "copied_settings_once": False,  # offered "copy settings from another device" after first sign-in
     "learn_from_edits": True,  # learn when you edit a transcript right after it's pasted (reads that field only)
     "learn": True,  # learn names/jargon you repeat and the corrections you make (data/learned.json)
     "vocabulary": [],  # words/names Whisper should spell your way
