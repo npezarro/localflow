@@ -30,7 +30,9 @@ IS_WIN = sys.platform == "win32"
 SINGLE_INSTANCE_PORT = 47219
 
 RED = "#ff5a5f"
-ROW_COLOURS = {"unchanged": "#dcf3df", "corrected": "#fff1b8", "changed": "#ffdcc7"}
+ROW_COLOURS = {"unchanged": "#dcf3df", "corrected": "#fff1b8", "changed": "#ffdcc7", "wrong": "#ffd2d2"}
+# Your own flag (right-click a transcript) wins over what the edit watch decided.
+VERDICT_TAG = {"right": "unchanged", "wrong": "wrong", "fixed": "corrected", "confirmed": "corrected"}
 IN_APP_TEXT = {"watching": "watching for edits…", "unreadable": "(this app doesn't expose its text)",
                "removed": "(deleted or moved)", "stale": "(not checked)"}
 
@@ -165,10 +167,12 @@ class App:
 
         key = ttk.Frame(parent)
         key.pack(fill="x", pady=(6, 0))
-        for status, label in (("unchanged", "left as dictated"), ("corrected", "you corrected it (learned)"),
-                              ("changed", "you rewrote it (not learned)")):
+        for status, label in (("unchanged", "right as dictated"), ("corrected", "corrected (learned)"),
+                              ("changed", "rewritten (not learned)"), ("wrong", "you flagged it wrong")):
             tk.Label(key, text=" %s " % label, background=ROW_COLOURS[status], foreground="#1d1f23",
                      font=("TkDefaultFont", 8)).pack(side="left", padx=(0, 6))
+        ttk.Label(key, text="Right-click a transcript to flag it.", foreground="#888",
+                  font=("TkDefaultFont", 8)).pack(side="left", padx=(6, 0))
         pane = ttk.PanedWindow(parent, orient="vertical")
         pane.pack(fill="both", expand=True, pady=(6, 0))
         frame = ttk.Frame(pane)
@@ -188,6 +192,8 @@ class App:
         sb.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._show_selected())
         self.tree.bind("<Double-1>", lambda _e: self.copy_selected())
+        for seq in ("<Button-3>",) + (("<Button-2>", "<Control-Button-1>") if IS_MAC else ()):
+            self.tree.bind(seq, self._history_menu)
         pane.add(frame, weight=3)
         lower = ttk.Frame(pane)
         self.detail = tk.Text(lower, height=5, wrap="word", relief="flat", padx=8, pady=6, undo=True)
@@ -690,7 +696,7 @@ class App:
             return
         if old.endswith(" ") and not new.endswith((" ", "\n")):
             new += " "
-        self.history.update(item["id"], text=new, original=item.get("original", old))
+        self.history.update(item["id"], text=new, original=item.get("original", old), verdict="fixed")
         learned = []
         if self.cfg.get("learn"):
             learned = self.learner.learn_correction(old, new, self.transcriber.is_uncommon)
@@ -992,12 +998,87 @@ class App:
                 status = "stale"  # LocalFlow closed while it was watching
             # Left: what LocalFlow wrote. Right: what it looked like in the app at the end.
             wrote = item.get("original") if item.get("edited_in_app") else item["text"]
-            after = ia.get("final") if status in ("unchanged", "corrected", "changed") else IN_APP_TEXT.get(status, "")
+            if status in ("unchanged", "corrected", "changed", "not_a_correction"):
+                after = (ia.get("final") or "") + ("   (you said: not a correction)" if status == "not_a_correction" else "")
+            else:
+                after = IN_APP_TEXT.get(status, "")
+            tag = VERDICT_TAG.get(item.get("verdict")) or (status if status in ROW_COLOURS else None)
             if q and q not in (wrote + " " + (after or "")).lower():
                 continue
             when = datetime.fromtimestamp(item["ts"]).strftime("%b %d %H:%M")
-            self.tree.insert("", "end", iid=item["id"], tags=(status,) if status in ROW_COLOURS else (),
+            self.tree.insert("", "end", iid=item["id"], tags=(tag,) if tag else (),
                              values=(when, wrote.replace("\n", " ⏎ "), (after or "").replace("\n", " ⏎ ")))
+
+    # ------------------------------------------------------------------ flagging transcripts
+    def _history_menu(self, event):
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            return
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
+        item = self._selected()
+        if not item:
+            return
+        m = tk.Menu(self.root, tearoff=False)
+        if item.get("edited_in_app"):
+            m.add_command(label="Not a correction: undo what LocalFlow learned from it",
+                          command=lambda: self.dismiss_edit(iid))
+            if self.learner.is_pending(item.get("original") or "", item["text"]):
+                m.add_command(label="Yes, a real correction: learn it now", command=lambda: self.confirm_edit(iid))
+            m.add_separator()
+        m.add_command(label="Transcript was right", command=lambda: self.set_verdict(iid, "right"))
+        m.add_command(label="Transcript was wrong: fix it…", command=lambda: self.flag_wrong(iid))
+        if item.get("verdict"):
+            m.add_command(label="Clear my flag", command=lambda: self.set_verdict(iid, None))
+        m.add_separator()
+        m.add_command(label="Copy", command=self.copy_selected)
+        m.add_command(label="Delete", command=self.delete_selected)
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
+
+    def _item(self, iid):
+        return next((i for i in self.history.items if i["id"] == iid), None)
+
+    def _reselect(self, iid, status):
+        self.refresh_history()
+        if self.tree.exists(iid):
+            self.tree.selection_set(iid)
+        self.set_status(status)
+
+    def set_verdict(self, iid, verdict):
+        self.history.update(iid, verdict=verdict)
+        self._reselect(iid, {"right": "Marked right.", "wrong": "Marked wrong."}.get(verdict, "Flag cleared."))
+
+    def dismiss_edit(self, iid):
+        """The edit watch called something a correction that wasn't: restore and un-learn."""
+        item = self._item(iid)
+        if not item or not item.get("edited_in_app"):
+            return
+        original, edited = item.get("original") or item["text"], item["text"]
+        undone = self.learner.unlearn_correction(original.strip(), edited.strip())
+        in_app = dict(item.get("in_app") or {}, status="not_a_correction")
+        self.history.update(iid, text=original, original=None, edited_in_app=False, in_app=in_app, verdict="right")
+        self.settings.refresh_learned()
+        self._reselect(iid, "Not a correction: " + ("undid " + "; ".join("“%s” → “%s”" % p for p in undone)
+                                                     if undone else "nothing had been learned from it") + ".")
+
+    def confirm_edit(self, iid):
+        item = self._item(iid)
+        if not item or not item.get("original"):
+            return
+        learned = self.learner.learn_correction(item["original"].strip(), item["text"].strip(),
+                                                self.transcriber.is_uncommon, confirm_after=1)
+        self.history.update(iid, verdict="confirmed")
+        self.settings.refresh_learned()
+        self._reselect(iid, "Learned: " + "; ".join("“%s” → “%s”" % p for p in learned))
+
+    def flag_wrong(self, iid):
+        self.history.update(iid, verdict="wrong")
+        self._reselect(iid, "Marked wrong: fix the text below and press Save correction to teach LocalFlow.")
+        self.detail.focus_set()
+        self.detail.mark_set("insert", "1.0")
 
     def _selected(self):
         sel = self.tree.selection()
@@ -1044,7 +1125,7 @@ class App:
             return
         if old.endswith(" ") and not new.endswith("\n"):
             new += " "
-        self.history.update(item["id"], text=new, original=item.get("original", old))
+        self.history.update(item["id"], text=new, original=item.get("original", old), verdict="fixed")
         learned = []
         if self.cfg.get("learn"):
             learned = self.learner.learn_correction(old, new, self.transcriber.is_uncommon)

@@ -70,3 +70,14 @@ def test_an_edit_in_an_app_needs_the_same_fix_twice(tmp_path, monkeypatch):
     assert lr.replacements()["maria"] == "Priya"
     # an explicit correction still applies at once
     assert lr.learn_correction("the sigma file", "the Figma file") == [("sigma", "Figma")]
+
+
+def test_unlearn_takes_back_a_false_correction(tmp_path, monkeypatch):
+    from localflow import learn, paths
+
+    monkeypatch.setattr(paths, "data_dir", lambda: str(tmp_path))
+    lr = learn.Learner()
+    lr.learn_correction("the sigma file", "the Figma file")
+    assert lr.replacements() == {"sigma": "Figma"} and "Figma" in lr.vocabulary()
+    assert lr.unlearn_correction("the sigma file", "the Figma file") == [("sigma", "Figma")]
+    assert lr.replacements() == {} and "Figma" not in lr.vocabulary()

@@ -73,21 +73,56 @@ class Learner:
             self._save()
         return promoted
 
+    @staticmethod
+    def correction_pairs(original, corrected):
+        """[(wrong, right)] word-level replacements between two versions of a transcript."""
+        a, b = original.split(), corrected.split()
+        norm = lambda ws: [w.lower().strip(".,!?;:\"()[]") for w in ws]  # noqa: E731
+        pairs = []
+        for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=norm(a), b=norm(b), autojunk=False).get_opcodes():
+            if op != "replace" or i2 - i1 > 4 or j2 - j1 > 4:
+                continue
+            wrong, right = _clean_phrase(a[i1:i2]), _clean_phrase(b[j1:j2])
+            if wrong and right and wrong.lower() != right.lower():
+                pairs.append((wrong, right))
+        return pairs
+
+    def is_pending(self, original, corrected):
+        """Is some part of this correction still waiting to be seen again before it applies?"""
+        reps = self.data["replacements"]
+        return any(wrong.lower() in reps and reps[wrong.lower()]["count"] < reps[wrong.lower()].get("needs", 1)
+                   for wrong, _right in self.correction_pairs(original, corrected))
+
+    def unlearn_correction(self, original, corrected):
+        """Take back what a correction taught (you said it wasn't one). Returns the pairs undone."""
+        undone = []
+        with self._lock:
+            reps = self.data["replacements"]
+            for wrong, right in self.correction_pairs(original, corrected):
+                rep = reps.get(wrong.lower())
+                if not rep or rep["to"].lower() != right.lower():
+                    continue
+                rep["count"] -= 1
+                if rep["count"] <= 0:
+                    del reps[wrong.lower()]
+                undone.append((wrong, right))
+                still_used = {w.lower() for r in reps.values() if r["count"] >= r.get("needs", 1)
+                              for w in r["to"].split()}
+                for word in right.split():
+                    term = self.data["terms"].get(word.lower())
+                    if term and term.get("source") == "correction" and word.lower() not in still_used:
+                        del self.data["terms"][word.lower()]
+            self._save()
+        return undone
+
     def learn_correction(self, original, corrected, is_uncommon=lambda w: True, confirm_after=1):
         """Diff the transcript you fixed against what was typed. Returns the [(wrong, right)]
         pairs now in effect. ``confirm_after``: how many times the same fix must be seen before
         it applies (1 for an explicit correction; 2 for an edit made in another app, which may
         be a change of mind rather than a mishearing)."""
-        a, b = original.split(), corrected.split()
-        norm = lambda ws: [w.lower().strip(".,!?;:\"()[]") for w in ws]  # noqa: E731
         learned = []
         with self._lock:
-            for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=norm(a), b=norm(b), autojunk=False).get_opcodes():
-                if op != "replace" or i2 - i1 > 4 or j2 - j1 > 4:
-                    continue
-                wrong, right = _clean_phrase(a[i1:i2]), _clean_phrase(b[j1:j2])
-                if not wrong or not right or wrong.lower() == right.lower():
-                    continue
+            for wrong, right in self.correction_pairs(original, corrected):
                 rep = self.data["replacements"].setdefault(wrong.lower(), {"to": right, "count": 0,
                                                                            "enabled": True})
                 if rep["to"].lower() != right.lower():

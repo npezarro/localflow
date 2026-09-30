@@ -76,3 +76,13 @@ def test_an_app_that_hides_its_text_is_reported_not_guessed():
     while not got and time.time() < deadline:
         time.sleep(0.05)
     assert got == [("id2", T, "unreadable", None, "Some App")]
+
+
+@pytest.mark.parametrize("span", [
+    T.replace("Please", "please"),                            # the app changed the capital
+    T.replace("Friday.", "Friday"),                           # dropped the full stop
+    T[:-1] + " and Monday.",                                  # kept writing where it ended
+    "Hi Sam, " + T,                                           # added a greeting before it
+])
+def test_harmless_changes_are_not_corrections(span):
+    assert classify(T, span) == "unchanged"

@@ -47,6 +47,10 @@ def final_span(baseline, final, transcript):
     return final[ns:ne].strip() or None
 
 
+def _plain(words):
+    return [w for w in (re.sub(r"[^\w']", "", x.lower().replace("’", "'")) for x in words) if w]
+
+
 def classify(transcript, span):
     """'unchanged' | 'corrected' (a fix worth learning) | 'changed' (rewritten, not learned)
     | 'removed' (deleted or not found)."""
@@ -56,6 +60,11 @@ def classify(transcript, span):
     if span == t:
         return "unchanged"
     old_words, new_words = t.split(), span.split()
+    ow, nw = _plain(old_words), _plain(new_words)
+    if ow == nw:
+        return "unchanged"  # only case, punctuation, quotes or spacing (often the app's autocorrect)
+    if nw[:len(ow)] == ow or nw[-len(ow):] == ow:
+        return "unchanged"  # words added before/after it: you kept writing, nothing was fixed
     if not 0.6 <= len(new_words) / len(old_words) <= 1.5:
         return "changed"
     if difflib.SequenceMatcher(None, [w.lower() for w in old_words], [w.lower() for w in new_words]).ratio() < 0.6:
