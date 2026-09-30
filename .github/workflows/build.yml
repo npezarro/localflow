@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller==6.22.3 pytest
       - name: Unit tests
-        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py tests/test_update_import.py tests/test_feedback.py tests/test_edits.py tests/test_sync.py
+        run: python -m pytest -q tests/test_hotkey.py tests/test_textproc.py tests/test_cloud_polish.py tests/test_live.py tests/test_learn.py tests/test_continuous.py tests/test_dictionary.py tests/test_chunked.py tests/test_update_import.py tests/test_feedback.py tests/test_edits.py tests/test_sync.py tests/test_apple_gpu.py
       - name: Fetch bundled model
         run: python scripts/fetch_model.py base.en
       - name: macOS icon
@@ -319,6 +319,20 @@ jobs:
           /tmp/LocalFlow.app/Contents/MacOS/LocalFlow --selftest --out "$PWD/installed.json"
           cat installed.json
           python -c "import json,os,sys; d=json.load(open('installed.json'))['data_dir']; sys.exit(0 if d==os.path.expanduser('~/Library/Application Support/LocalFlow') else 'installed app should use Application Support, got '+d)"
+      - name: Test Apple GPU (MLX) in the packaged app
+        # Downloads the MLX runtime + base.en in MLX format into a scratch data folder and
+        # transcribes on the GPU. Hosted runners are VMs whose Metal support is uncertain, so a
+        # failure here is reported but doesn't block the release (the real check is on a Mac).
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          mkdir -p /tmp/lfgpu
+          LOCALFLOW_DATA_DIR=/tmp/lfgpu unzipped/LocalFlow/LocalFlow.app/Contents/MacOS/LocalFlow \
+            --selftest --download-apple-gpu --device apple --out "$PWD/apple.json" || true
+          cat apple.json || true
+          cat /tmp/lfgpu/localflow.log 2>/dev/null | tail -20 || true
+          grep -q '"ok": true' apple.json && grep -q '"device": "apple"' apple.json
       - name: Test in-app update (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 12

@@ -29,6 +29,8 @@ def run(argv):
     out = None
     model = None
     expect = "country"
+    device = "auto"
+    apple_gpu_download = False
     it = iter(argv)
     for arg in it:
         if arg == "--out":
@@ -37,6 +39,10 @@ def run(argv):
             model = next(it)
         elif arg == "--expect":
             expect = next(it)
+        elif arg == "--device":
+            device = next(it)
+        elif arg == "--download-apple-gpu":  # CI: fetch the MLX runtime first, then run on the GPU
+            apple_gpu_download = True
         elif arg != "--selftest":
             wav = arg
     wav = wav or os.path.join(paths.bundle_dir(), "samples", "jfk.wav")
@@ -46,9 +52,17 @@ def run(argv):
               "python": sys.version.split()[0], "model": model,
               "model_source": resolve_model(model)[0], "data_dir": paths.data_dir(), "ok": False}
     try:
+        if apple_gpu_download:
+            from . import apple_gpu
+
+            _step("downloading Apple GPU support")
+            result["apple_gpu_mb"] = apple_gpu.download()
         _step("loading model")
         t = Transcriber()
-        result["load_s"] = round(t.load(model), 2)
+        result["load_s"] = round(t.load(model, device=device), 2)
+        result["device"], result["device_error"] = t.device, t.device_error
+        if device not in ("auto", "cpu") and t.device != device:
+            raise RuntimeError("asked for %s but running on %s: %s" % (device, t.device, t.device_error))
         _step("transcribing")
         samples = audio.load_wav(wav)
         t0 = time.time()

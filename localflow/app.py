@@ -1033,6 +1033,7 @@ class App:
         elif kind == "model_ready":
             self.set_status("Ready · %s" % self._engine_label())
             self.settings.refresh_gpu()
+            self.settings.refresh_apple()
             if IS_MAC and self.listener and not self.listener.is_trusted:
                 self.set_status("Hotkeys blocked: allow LocalFlow in Privacy & Security > "
                                 "Accessibility and Input Monitoring, then restart", warn=True)
@@ -1347,6 +1348,23 @@ class App:
             self.ui_q.put(("dialog", "Speed test", msg))
 
         threading.Thread(target=run, daemon=True, name="speed-test").start()
+
+    def download_apple_gpu(self, progress):
+        """Fetch MLX (Apple Silicon GPU), then reload the model on the GPU."""
+        from . import apple_gpu
+
+        def run():
+            try:
+                mb = apple_gpu.download(lambda msg, frac: self.ui_q.put(
+                    ("call", lambda: progress("%s… %d%%" % (msg, frac * 100)))))
+                self.ui_q.put(("call", lambda: progress("Installed (%d MB). Loading the model on the GPU "
+                                                         "(it downloads once in MLX format)…" % mb)))
+                self.ui_q.put(("call", lambda: self.load_model(self.cfg["model"])))
+            except Exception as exc:
+                err = "Download failed: %s" % exc
+                self.ui_q.put(("call", lambda: progress(err)))
+
+        threading.Thread(target=run, daemon=True, name="apple-gpu-download").start()
 
     def download_gpu(self, progress):
         """Fetch GPU support, then reload the model on the GPU. Runs off the UI thread."""

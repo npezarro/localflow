@@ -1,6 +1,7 @@
 """Settings tab: scrollable form, always-visible Save/Revert footer, unsaved-change
 tracking (the app asks before you leave the tab or close the window)."""
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -36,6 +37,8 @@ FLOATS = {"release_tail": "Keep listening after release", "preroll": "Keep befor
 
 
 DEVICES = [("auto", "Auto (GPU when available)"), ("cpu", "CPU only")]
+if sys.platform == "darwin" and platform.machine() == "arm64":
+    DEVICES.insert(1, ("apple", "Apple GPU (MLX)"))
 BEAMS = [(1, "Fast (recommended)"), (5, "Thorough")]
 TYPE_INTO = [("all", "All apps"), ("only", "Only the apps listed below"),
              ("except", "All apps except those listed below")]
@@ -234,6 +237,18 @@ class SettingsPanel:
             self.gpu_status = tk.StringVar()
             ttk.Label(f, textvariable=self.gpu_status, foreground=MUTED, wraplength=px(380)).pack(side="left", padx=8)
             self._row(s, "NVIDIA GPU", f)
+        from . import apple_gpu
+
+        if apple_gpu.IS_APPLE_SILICON:
+            f = ttk.Frame(s)
+            self.apple_btn = ttk.Button(f, text="Download Apple GPU support (about 45 MB)",
+                                        command=self._apple_download)
+            self.apple_btn.pack(side="left")
+            self.apple_status = tk.StringVar()
+            ttk.Label(f, textvariable=self.apple_status, foreground=MUTED, wraplength=px(380)).pack(side="left", padx=8)
+            self._row(s, "Apple GPU", f, "Runs Whisper on your Mac's GPU with Apple's MLX (often several times "
+                                         "faster than the CPU, most of all for large-v3-turbo). Each model downloads "
+                                         "once more in MLX format the first time it's used.")
         self._row(s, "Search", self._combo(s, "beam_size", [lbl for _k, lbl in BEAMS], 34),
                   "Fast tries one reading at a time; Thorough compares five. In our tests they were "
                   "equally accurate and Fast was 10-20% quicker.")
@@ -441,6 +456,40 @@ class SettingsPanel:
                                    state="normal")
             self.gpu_status.set("NVIDIA GPU found. Download support to use it.")
 
+    def refresh_apple(self):
+        if not hasattr(self, "apple_status"):
+            return
+        from . import apple_gpu
+
+        t = self.app.transcriber
+        if apple_gpu.installed():
+            self.apple_btn.configure(text="Remove Apple GPU support", command=self._apple_remove, state="normal")
+            if t.device == "apple":
+                self.apple_status.set("Installed and in use.")
+            elif t.device_error:
+                self.apple_status.set("Installed, not in use: %s" % t.device_error)
+            elif not apple_gpu.supports(self.app.cfg["model"]):
+                self.apple_status.set("Installed; %s has no Apple GPU version, so it runs on the CPU."
+                                      % self.app.cfg["model"])
+            else:
+                self.apple_status.set("Installed, not in use (Processor is set to CPU only).")
+        else:
+            self.apple_btn.configure(text="Download Apple GPU support (about 45 MB)", command=self._apple_download,
+                                     state="normal")
+            self.apple_status.set("Uses the CPU until you download it.")
+
+    def _apple_download(self):
+        self.apple_btn.configure(state="disabled")
+        self.app.download_apple_gpu(self.apple_status.set)
+
+    def _apple_remove(self):
+        from . import apple_gpu
+
+        if messagebox.askyesno("LocalFlow", "Remove Apple GPU support and its models? LocalFlow will use the CPU."):
+            apple_gpu.remove()
+            self.app.load_model(self.app.cfg["model"])
+            self.refresh_apple()
+
     def _gpu_download(self):
         self.gpu_btn.configure(state="disabled")
         self.app.download_gpu(self.gpu_status.set)
@@ -564,6 +613,7 @@ class SettingsPanel:
             self._loading = False
         self.refresh_learned()
         self.refresh_gpu()
+        self.refresh_apple()
         self._clean()
 
     def collect(self):

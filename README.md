@@ -128,6 +128,8 @@ To move your data from another copy (say an old portable folder), use *Settings 
 
 ### Making it faster
 
+**Apple Silicon Macs:** *Settings → Transcription → Download Apple GPU support* (about 45 MB) runs Whisper on the Mac's GPU with Apple's MLX instead of the CPU; Processor *Auto* then uses it (or pick *Apple GPU (MLX)*). Each model downloads once more in MLX format the first time it's used (large-v3-turbo is about 1.6 GB). If the GPU can't be used, LocalFlow says why under *Apple GPU* and keeps working on the CPU. Needs macOS 14 or later.
+
 Measured on a Ryzen 7 5800X3D with a GTX 1060 (time to finish after you let go of the hotkey):
 
 | Setup | 8-second dictation | 32-second dictation |
