@@ -221,6 +221,9 @@ class MLXModel:
         self.path = path or model_path(name)
         self._mw = mlx_whisper
         ModelHolder.get_model(self.path, mx.float16)  # load now, not on the first dictation
+        # The GPU's first run compiles its kernels (seconds); do it now rather than on the
+        # first dictation.
+        self.transcribe(np.zeros(16000, dtype=np.float32), "en", temperature=0.0, sample_len=8)
 
     def transcribe(self, audio, language=None, prompt=None, word_timestamps=False,
                    temperature=(0.0, 0.2, 0.4, 0.6, 0.8), sample_len=None):
