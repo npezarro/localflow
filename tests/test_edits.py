@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from localflow.edits import EditWatcher, find_edit
+from localflow.edits import EditWatcher, classify, final_span, find_edit
 
 T = "Please ask Maria to send the Kabir nets report by Friday."
 
@@ -49,4 +49,30 @@ def test_watcher_reports_an_edit_from_a_field():
     deadline = time.time() + 2
     while not got and time.time() < deadline:
         time.sleep(0.05)
-    assert got == [("id1", T, T.replace("Kabir nets", "Kubernetes"))]
+    assert got == [("id1", T, "corrected", T.replace("Kabir nets", "Kubernetes"), None)]
+
+
+@pytest.mark.parametrize("after,status,final", [
+    ("Hi team, " + T + " Thanks!", "unchanged", T),
+    ("Hi team, " + T.replace("Maria", "Priya"), "corrected", T.replace("Maria", "Priya")),
+    ("Hi team, Let's meet next week instead to go over everything in person.", "changed",
+     "Let's meet next week instead to go over everything in person."),
+    ("Hi team, ", "removed", None),
+])
+def test_every_watch_records_what_the_transcript_became(after, status, final):
+    span = final_span("Hi team, " + T, after, T)
+    assert (classify(T, span), span) == (status, final)
+
+
+def test_an_app_that_hides_its_text_is_reported_not_guessed():
+    class Hidden:
+        def read(self):
+            return ""
+
+    got = []
+    w = EditWatcher(lambda *a: got.append(a), field_factory=Hidden, watch_seconds=1, poll=0.1)
+    w.watch("id2", T, "Some App")
+    deadline = time.time() + 5  # it retries for ~2.5 s before calling the field unreadable
+    while not got and time.time() < deadline:
+        time.sleep(0.05)
+    assert got == [("id2", T, "unreadable", None, "Some App")]

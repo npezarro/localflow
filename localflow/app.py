@@ -54,7 +54,7 @@ class App:
         self.continuous = False  # always-on live listening (pause/resume hotkey)
         self.correcting = None  # {"item", "started"} while recording a spoken correction
         self.last_paste = None  # where the last transcript was pasted, for an in-place correction
-        self.edit_watch = edits.EditWatcher(self._learn_from_edit)
+        self.edit_watch = edits.EditWatcher(self._edit_watch_result)
         self._blocked_notice = None
         self.record_started = 0.0
         self.polish_failures = 0
@@ -166,7 +166,7 @@ class App:
         self.tree = ttk.Treeview(frame, columns=("when", "text"), show="headings", selectmode="browse")
         self.tree.heading("when", text="When")
         self.tree.heading("text", text="Transcript (double-click to copy)")
-        self.tree.column("when", width=px(120), stretch=False)
+        self.tree.column("when", width=px(140), stretch=False)
         self.tree.column("text", width=px(500))
         sb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
@@ -570,16 +570,24 @@ class App:
         """Keep an eye on the field we just wrote into, to learn from the user's fixes."""
         app = app or apps.foreground()
         if self.cfg.get("learn") and self.cfg.get("learn_from_edits") and not apps.is_terminal(app):
-            self.edit_watch.watch(item_id, text)
+            self.edit_watch.watch(item_id, text, apps.label(app))
 
-    def _learn_from_edit(self, item_id, old, new):
-        """Runs on the watcher thread: the user changed our words in the app; learn it."""
+    def _edit_watch_result(self, item_id, old, status, final, app_name):
+        """Runs on the watcher thread when a watch ends: keep what the transcript looked like in
+        the app (so every learned fix can be checked in Transcripts), and learn real fixes."""
         item = next((i for i in self.history.items if i["id"] == item_id), None)
         if not item:
             return
+        in_app = {"status": status, "final": final, "app": app_name or "", "at": time.time()}
+        if status != "corrected":
+            self.history.update(item_id, in_app=in_app)
+            if status in ("changed", "removed"):
+                self.ui_q.put(("call", self.refresh_history))
+            return
+        new = final
         new_text = new + (" " if item["text"].endswith(" ") else "")
         self.history.update(item_id, text=new_text, original=item.get("original", item["text"]),
-                            edited_in_app=True)
+                            edited_in_app=True, in_app=in_app)
         # An edit may be a change of mind, not a mishearing: it becomes a rule on the 2nd time.
         learned = self.learner.learn_correction(old, new, self.transcriber.is_uncommon, confirm_after=2) \
             if self.cfg.get("learn") else []
@@ -967,6 +975,10 @@ class App:
             if q and q not in item["text"].lower():
                 continue
             when = datetime.fromtimestamp(item["ts"]).strftime("%b %d %H:%M")
+            if item.get("edited_in_app"):
+                when += "  ✎"  # you corrected it in the app (learned)
+            elif (item.get("in_app") or {}).get("status") == "changed":
+                when += "  ≠"  # you rewrote it in the app (not learned)
             self.tree.insert("", "end", iid=item["id"], values=(when, item["text"].replace("\n", " ⏎ ")))
 
     def _selected(self):
@@ -982,9 +994,20 @@ class App:
             self.detail.insert("1.0", item["text"].rstrip())
             meta = "%s, %.1fs." % (item.get("model", ""), item.get("seconds", 0))
             if item.get("original"):
-                meta += "  Corrected from: " + item["original"].strip()
+                how = " (you edited it in %s)" % (item.get("in_app") or {}).get("app", "the app") \
+                    if item.get("edited_in_app") else ""
+                meta += "  Corrected%s from: %s" % (how, item["original"].strip())
             elif item.get("raw"):
                 meta += "  Before clean-up: " + item["raw"].strip()
+            ia = item.get("in_app")
+            if ia and not item.get("edited_in_app"):
+                where = ia.get("app") or "the app"
+                meta += "  " + {
+                    "unchanged": "Left as is in %s." % where,
+                    "changed": "Rewritten in %s (not learned): %s" % (where, (ia.get("final") or "").strip()),
+                    "removed": "Deleted or moved in %s." % where,
+                    "unreadable": "%s doesn't expose its text, so edits there can't be learned." % where,
+                }.get(ia["status"], "")
             self.detail_meta.set(meta + "  Edit above and press Save correction to teach LocalFlow.")
         self.detail.edit_modified(False)
         self.correct_btn.configure(state="disabled")

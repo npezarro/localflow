@@ -24,11 +24,10 @@ def _norm(text):
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def find_edit(baseline, final, transcript):
-    """The user's edited version of ``transcript`` inside ``final`` (the field's text now),
-    given ``baseline`` (the field right after LocalFlow wrote it). None if the transcript
-    wasn't changed, can't be found, or the change doesn't look like a correction (text typed
-    before or after it, a rewrite into something else, the whole thing deleted)."""
+def final_span(baseline, final, transcript):
+    """What ``transcript`` became inside ``final`` (the field's text now), given ``baseline``
+    (the field right after LocalFlow wrote it); text typed before or after it isn't included.
+    None if it can't be found (deleted, or the field changed beyond recognition)."""
     baseline, final, t = _norm(baseline), _norm(final), _norm(transcript).strip()
     if not t or len(baseline) > MAX_CHARS or len(final) > MAX_CHARS:
         return None
@@ -45,15 +44,30 @@ def find_edit(baseline, final, transcript):
             ne = j1 + (e - i1) if tag == "equal" else j2
     if ns is None or ne is None or ne <= ns:
         return None
-    edited = final[ns:ne].strip()
-    if edited == t:
-        return None
-    old_words, new_words = t.split(), edited.split()
-    if not new_words or not 0.6 <= len(new_words) / len(old_words) <= 1.5:
-        return None
+    return final[ns:ne].strip() or None
+
+
+def classify(transcript, span):
+    """'unchanged' | 'corrected' (a fix worth learning) | 'changed' (rewritten, not learned)
+    | 'removed' (deleted or not found)."""
+    t = _norm(transcript).strip()
+    if not span:
+        return "removed"
+    if span == t:
+        return "unchanged"
+    old_words, new_words = t.split(), span.split()
+    if not 0.6 <= len(new_words) / len(old_words) <= 1.5:
+        return "changed"
     if difflib.SequenceMatcher(None, [w.lower() for w in old_words], [w.lower() for w in new_words]).ratio() < 0.6:
-        return None  # rewritten, not corrected
-    return edited
+        return "changed"
+    return "corrected"
+
+
+def find_edit(baseline, final, transcript):
+    """The corrected transcript, or None if it wasn't changed, can't be found, or the change
+    doesn't look like a correction (a rewrite into something else, the whole thing deleted)."""
+    span = final_span(baseline, final, transcript)
+    return span if classify(transcript, span) == "corrected" else None
 
 
 # ------------------------------------------------------------------ reading the focused field
@@ -121,21 +135,24 @@ def focused_field():
 
 
 class EditWatcher:
-    """Watches one field after each transcript; calls ``on_edit(item_id, old, new)``."""
+    """Watches one field after each transcript; calls ``on_result(item_id, transcript, status,
+    final, tag)`` when the watch ends: status is one of classify()'s, or 'unreadable' when the
+    app doesn't expose the field's text; ``final`` is what the transcript looked like in the
+    app at the end (None if unknown)."""
 
-    def __init__(self, on_edit, field_factory=focused_field, watch_seconds=WATCH_SECONDS, poll=POLL_SECONDS):
-        self.on_edit = on_edit
+    def __init__(self, on_result, field_factory=focused_field, watch_seconds=WATCH_SECONDS, poll=POLL_SECONDS):
+        self.on_result = on_result
         self.field_factory = field_factory
         self.watch_seconds = watch_seconds
         self.poll = poll
         self._current = None  # stop Event of the running watch
 
-    def watch(self, item_id, transcript):
+    def watch(self, item_id, transcript, tag=None):
         """Start watching the focused field (call right after the paste/typing)."""
         self.stop()
         stop = threading.Event()
         self._current = stop
-        threading.Thread(target=self._run, args=(item_id, transcript, stop), daemon=True,
+        threading.Thread(target=self._run, args=(item_id, transcript, stop, tag), daemon=True,
                          name="edit-watch").start()
 
     def stop(self):
@@ -144,16 +161,28 @@ class EditWatcher:
             self._current.set()
             self._current = None
 
-    def _run(self, item_id, transcript, stop):
-        time.sleep(0.4)  # let the target app take the paste
+    def _report(self, *args):
         try:
-            field = self.field_factory()
-            baseline = field.read()
-        except Exception as exc:
-            log.debug("edit watch: can't read the field (%s)", exc)
-            return
-        if not baseline or _norm(transcript).strip() not in _norm(baseline):
-            log.debug("edit watch: the field doesn't expose the text we wrote; not watching")
+            self.on_result(*args)
+        except Exception:
+            log.exception("recording an edit-watch result failed")
+
+    def _run(self, item_id, transcript, stop, tag):
+        field, baseline, want = None, None, _norm(transcript).strip()
+        for _attempt in range(6):  # the app may take a moment to show what was pasted
+            if stop.wait(0.4):
+                break
+            try:
+                field = self.field_factory()
+                baseline = field.read()
+            except Exception as exc:
+                baseline = None
+                log.debug("edit watch: can't read the field (%s)", exc)
+            if baseline and want in _norm(baseline):
+                break
+        if not baseline or want not in _norm(baseline):
+            log.info("edit watch: this app doesn't expose the text we wrote; can't learn from edits there")
+            self._report(item_id, transcript, "unreadable", None, tag)
             return
         last = baseline
         deadline = time.monotonic() + self.watch_seconds
@@ -165,13 +194,10 @@ class EditWatcher:
             if value is None:
                 break  # the field is gone (window closed, page changed)
             last = value
-        edited = find_edit(baseline, last, transcript)
-        if edited:
-            log.info("learned from an edit to transcript %s", item_id)
-            try:
-                self.on_edit(item_id, _norm(transcript).strip(), edited)
-            except Exception:
-                log.exception("applying an edit failed")
+        span = final_span(baseline, last, transcript)
+        status = classify(transcript, span)
+        log.info("edit watch on %s ended: %s", item_id, status)
+        self._report(item_id, _norm(transcript).strip(), status, span, tag)
 
 
 def words_changed(old, new):
