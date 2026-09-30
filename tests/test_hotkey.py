@@ -152,3 +152,39 @@ def test_stuck_key_is_forgotten_so_the_hotkey_matches_again(monkeypatch):
     assert listener.clear_stale() == ["cmd_l"]
     m.press("f9")
     assert started
+
+
+def test_fn_key_is_a_named_hotkey():
+    from localflow.hotkey import combo_text, format_combo, key_name, parse_combo, win_vk_name
+
+    assert win_vk_name(0xC1) == "fn"            # what keyboards that report Fn send on Windows
+    assert key_name("fn") == "fn"               # synthesised on macOS from the flags change
+    assert combo_text({"fn"}) == "fn" and combo_text({"ctrl_l", "fn"}) == "fn+ctrl"
+    assert parse_combo("Fn") == parse_combo("globe") == frozenset({"fn"})
+    assert format_combo("fn+ctrl").startswith("Fn+")
+    started = []
+    m = HotkeyMachine("fn", on_start=lambda: started.append(1), on_stop=lambda: None, on_cancel=lambda: None)
+    m.press("fn")
+    assert started
+
+
+def test_mac_fn_key_press_and_release_from_flag_changes(monkeypatch):
+    import sys
+    import types
+
+    import localflow.hotkey as hk
+
+    fake = types.SimpleNamespace(kCGEventFlagsChanged=12, kCGKeyboardEventKeycode=9, kCGEventSourceUnixProcessID=41,
+                                 kCGEventKeyDown=10, kCGEventKeyUp=11)
+    fake.CGEventGetIntegerValueField = lambda ev, field: ev["code"] if field == 9 else 0
+    fake.CGEventGetFlags = lambda ev: ev["flags"]
+    monkeypatch.setitem(sys.modules, "Quartz", fake)
+    events = []
+    machine = HotkeyMachine("fn", on_start=lambda: events.append("start"), on_stop=lambda: events.append("stop"),
+                            on_cancel=lambda: events.append("cancel"), min_hold=0)
+    lst = hk.HotkeyListener(machine)
+    lst._mac_intercept(12, {"code": 193, "flags": hk.MAC_FN_FLAG})   # Fn down (any raw code)
+    lst._mac_intercept(12, {"code": 56, "flags": hk.MAC_FN_FLAG | 0x20000})  # Shift while Fn held: no change
+    assert events == ["start"] and machine.pressed == {"fn"}
+    lst._mac_intercept(12, {"code": 193, "flags": 0})                # Fn up
+    assert events == ["start", "stop"]

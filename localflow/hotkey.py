@@ -24,8 +24,16 @@ ALIASES = {
     "control": "ctrl", "option": "alt", "opt": "alt", "win": "cmd", "windows": "cmd",
     "super": "cmd", "command": "cmd", "meta": "cmd", "escape": "esc", "return": "enter",
     "altgr": "alt_r", "right_alt": "alt_r", "right_option": "alt_r", "right_ctrl": "ctrl_r",
-    "right_cmd": "cmd_r", "right_shift": "shift_r",
+    "right_cmd": "cmd_r", "right_shift": "shift_r", "function": "fn", "globe": "fn",
 }
+# Windows virtual keys that mean something we name. Many keyboards never report Fn at all
+# (the keyboard handles it); those that do, send VK 0xC1.
+WIN_VK_NAMES = {0xC1: "fn"}
+# macOS: Fn / 🌐 arrives only as a modifier-flags change (pynput never reports it pressed,
+# and reports it under raw codes that vary by keyboard: 63, 179 for 🌐, others seen). We
+# follow the Fn flag itself and ignore pynput's raw events for those codes.
+MAC_FN_RAW = {"vk63", "vk179", "vk193"}
+MAC_FN_FLAG = 0x800000  # kCGEventFlagMaskSecondaryFn
 SIDED = {"ctrl", "alt", "cmd", "shift"}
 
 
@@ -43,15 +51,15 @@ def parse_combo(text):
 def format_combo(text):
     mac = sys.platform == "darwin"
     names = {"ctrl": "Ctrl", "alt": "Option" if mac else "Alt", "cmd": "Cmd" if mac else "Win",
-             "shift": "Shift", "space": "Space", "esc": "Esc"}
-    order = ["ctrl", "alt", "shift", "cmd"]
+             "shift": "Shift", "space": "Space", "esc": "Esc", "fn": "Fn"}
+    order = ["fn", "ctrl", "alt", "shift", "cmd"]
     tokens = sorted(parse_combo(text), key=lambda t: (order.index(t) if t in order else 9, t))
     return "+".join(names.get(t, t.replace("_r", " (right)").replace("_l", " (left)").title()) for t in tokens)
 
 
 def combo_text(keys):
     """{'ctrl_l', 'cmd_l'} -> 'ctrl+cmd' (left-side keys generalised, right-side kept)."""
-    order = ["ctrl", "alt", "shift", "cmd"]
+    order = ["fn", "ctrl", "alt", "shift", "cmd"]
     tokens = set()
     for k in keys:
         base = k[:-2] if k.endswith("_l") and k[:-2] in SIDED else k
@@ -150,6 +158,8 @@ class HotkeyMachine:
 
 def key_name(key):
     """Normalise a pynput key to our names ('ctrl_l', 'cmd_r', 'space', 'v', ...)."""
+    if isinstance(key, str):
+        return key  # a key we synthesise ourselves (macOS Fn)
     from pynput import keyboard
 
     if isinstance(key, keyboard.Key):
@@ -162,6 +172,8 @@ def key_name(key):
         if sys.platform == "win32" and vk is not None:
             if 0x41 <= vk <= 0x5A or 0x30 <= vk <= 0x39:
                 return chr(vk).lower()
+            if vk in WIN_VK_NAMES:
+                return WIN_VK_NAMES[vk]
         if key.char:
             return key.char.lower()
         if vk is not None:
@@ -175,6 +187,8 @@ def win_vk_name(vk):
         return chr(vk).lower()
     if 0x70 <= vk <= 0x87:
         return "f%d" % (vk - 0x6F)
+    if vk in WIN_VK_NAMES:
+        return WIN_VK_NAMES[vk]
     return {0x20: "space", 0x0D: "enter", 0x09: "tab", 0x1B: "esc"}.get(vk)
 
 
@@ -192,6 +206,7 @@ class HotkeyListener:
         self._capture = None  # (callback, keys seen) while the user records a new hotkey
         self._swallowed = set()  # keys of a fired one-shot hotkey, kept out of the focused app
         self._mac_swallow = False
+        self._mac_fn_down = False
         self.user_keys = 0  # presses of keys that aren't part of any LocalFlow hotkey
         self.last_probe_seen = 0.0
         self._tap_disabled = False
@@ -216,14 +231,17 @@ class HotkeyListener:
             elif sys.platform == "darwin":
                 import Quartz
 
-                stale = [k for k in pressed if k in self._vk_of and not Quartz.CGEventSourceKeyState(
-                    Quartz.kCGEventSourceStateHIDSystemState, self._vk_of[k])]
+                state = Quartz.kCGEventSourceStateHIDSystemState
+                stale = [k for k in pressed if k != "fn" and k in self._vk_of
+                         and not Quartz.CGEventSourceKeyState(state, self._vk_of[k])]
+                if "fn" in pressed and not Quartz.CGEventSourceFlagsState(state) & MAC_FN_FLAG:
+                    stale.append("fn")  # Fn has no reliable key state; its flag is the truth
         except Exception:
             pass
         # Keys the OS can't be asked about: "held" with no keyboard activity for a while,
         # outside a dictation, means a release we missed.
         if self.machine.state in (IDLE, BLOCKED) and time.monotonic() - self.last_event > 5:
-            stale += [k for k in pressed if k not in self._vk_of and k not in stale]
+            stale += [k for k in pressed if k not in self._vk_of and k != "fn" and k not in stale]
         return sorted(stale)
 
     def clear_stale(self):
@@ -333,6 +351,17 @@ class HotkeyListener:
                 self._tap_disabled = True
                 return event
             code = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
+            if event_type == Quartz.kCGEventFlagsChanged:
+                fn_down = bool(Quartz.CGEventGetFlags(event) & MAC_FN_FLAG)
+                injected = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGEventSourceUnixProcessID) != 0
+                if fn_down != self._mac_fn_down and (ACCEPT_INJECTED or not injected):
+                    self._mac_fn_down = fn_down
+                    self._vk_of["fn"] = code
+                    if fn_down:
+                        self._on_press("fn")
+                    else:
+                        self._on_release("fn")
+                return event
             if event_type == Quartz.kCGEventKeyDown and self._mac_swallow:
                 self._mac_swallow = False  # a one-shot hotkey just fired on this key
                 self._swallowed.add(code)
@@ -354,7 +383,7 @@ class HotkeyListener:
         if injected and not ACCEPT_INJECTED:
             return
         name = key_name(key)
-        if not name or name == MASK_KEY:
+        if not name or name == MASK_KEY or (sys.platform == "darwin" and name in MAC_FN_RAW):
             return
         self.last_event = time.monotonic()
         vk = getattr(key, "vk", None) or getattr(getattr(key, "value", None), "vk", None)
@@ -382,7 +411,7 @@ class HotkeyListener:
         if injected and not ACCEPT_INJECTED:
             return
         name = key_name(key)
-        if not name or name == MASK_KEY:
+        if not name or name == MASK_KEY or (sys.platform == "darwin" and name in MAC_FN_RAW):
             return
         self.last_event = time.monotonic()
         if self._capture:

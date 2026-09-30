@@ -176,6 +176,8 @@ Same core loop: hold-to-talk, hands-free lock, floating waveform pill, paste int
 
 ## Troubleshooting
 
+- **Using Fn / 🌐 as the hotkey (Mac):** click *Record…* and press Fn; it shows as `fn` (or type `fn`). So the key doesn't also open the emoji picker or switch input source, set *System Settings → Keyboard → Press 🌐 key to* **Do Nothing**.
+
 - **Hotkey stopped responding:** LocalFlow now repairs this by itself: every couple of seconds it checks that the keys it thinks are held really are (a key released on the lock screen, at Ctrl+Alt+Del or in an admin prompt is never seen and used to block the hotkey), and it reconnects if the system stops sending it keys. If it still happens, *Quick settings → Restart hotkeys & microphone* (or *Restart LocalFlow*), also in the tray menu.
 
 - **Words missing or wrong:** run *Settings → Test microphone*. A low peak means the wrong input or a muted mic. Keep *Keep the microphone ready* on so the first word isn't clipped. Add names to *Vocabulary*. For the best accuracy switch the engine to Groq, or the local model to `small.en` / `large-v3-turbo`. `data/localflow.log` records each dictation's length, level, engine and timing, and `data/last-recording.wav` is exactly what was transcribed.
