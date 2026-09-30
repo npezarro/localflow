@@ -366,9 +366,9 @@ class SettingsPanel:
                         variable=self._var("learn_from_edits", tk.BooleanVar)).grid(row=s._row, column=1, sticky="w")
         s._row += 1
         ttk.Label(s, foreground=MUTED, wraplength=px(520), justify="left",
-                  text="For 3 minutes after pasting, LocalFlow reads only that text field (never password "
-                       "fields or terminals) to see if you changed its words, and learns the fix. Nothing "
-                       "else from the field is kept.").grid(row=s._row, column=1, sticky="w")
+                  text="After pasting, LocalFlow reads only that text field (never password fields or "
+                       "terminals) until you leave it or send it (20 s at most) to see if you changed its "
+                       "words, and learns the fix. Nothing else from the field is kept.").grid(row=s._row, column=1, sticky="w")
         s._row += 1
         f = ttk.Frame(s)
         self.learned_list = tk.Listbox(f, height=5, activestyle="none")

@@ -2,7 +2,7 @@
 
 Right after a transcript lands in a text field, LocalFlow keeps an eye on that one field
 (through the OS accessibility interface: UI Automation on Windows, the Accessibility API on
-macOS) for a few minutes. If you change the words it wrote ("Kabir nets" -> "Kubernetes"),
+macOS) until you leave it or send it, for at most ``WATCH_SECONDS``. If you change the words it wrote ("Kabir nets" -> "Kubernetes"),
 the change is learned exactly like a *Save correction*. It reads only the field it just
 wrote into, never password fields or terminals, and keeps nothing except the edited
 transcript itself.
@@ -15,8 +15,8 @@ import threading
 import time
 
 log = logging.getLogger(__name__)
-WATCH_SECONDS = 180
-POLL_SECONDS = 2.0
+WATCH_SECONDS = 20  # hard cap; the watch normally ends when you leave the field or send it
+POLL_SECONDS = 0.3
 MAX_CHARS = 20000  # longer documents aren't diffed (too slow, and too much to hold)
 
 
@@ -98,6 +98,10 @@ class _WindowsField:
         if self._el is None or self._el.CurrentIsPassword:
             raise LookupError("no readable focused field")
 
+    def has_focus(self):
+        cur = self._auto.GetFocusedElement()
+        return bool(cur) and bool(self._auto.CompareElements(cur, self._el))
+
     def read(self):
         uia = self._uia
         for pattern_id, read in (
@@ -129,6 +133,11 @@ class _MacField:
         if not err and str(subrole) == "AXSecureTextField":
             raise LookupError("password field")
         self._el = el
+
+    def has_focus(self):
+        err, cur = self._hi.AXUIElementCopyAttributeValue(
+            self._hi.AXUIElementCreateSystemWide(), self._hi.kAXFocusedUIElementAttribute, None)
+        return not err and cur is not None and cur == self._el
 
     def read(self):
         err, value = self._hi.AXUIElementCopyAttributeValue(self._el, self._hi.kAXValueAttribute, None)
@@ -193,15 +202,21 @@ class EditWatcher:
             log.info("edit watch: this app doesn't expose the text we wrote; can't learn from edits there")
             self._report(item_id, transcript, "unreadable", None, tag)
             return
+        # Keep the last reading taken while you were still in the field with our text in it.
+        # The watch ends when you leave the field (switching windows, clicking elsewhere), send
+        # it (chat boxes clear or move on), or after watch_seconds.
         last = baseline
+        has_focus = getattr(field, "has_focus", lambda: True)
         deadline = time.monotonic() + self.watch_seconds
         while not stop.wait(self.poll) and time.monotonic() < deadline:
             try:
+                if not has_focus():
+                    break
                 value = field.read()
             except Exception:
                 value = None
-            if value is None:
-                break  # the field is gone (window closed, page changed)
+            if value is None or final_span(baseline, value, transcript) is None:
+                break  # field gone, cleared or sent: what it held just before is the result
             last = value
         span = final_span(baseline, last, transcript)
         status = classify(transcript, span)

@@ -86,3 +86,43 @@ def test_an_app_that_hides_its_text_is_reported_not_guessed():
 ])
 def test_harmless_changes_are_not_corrections(span):
     assert classify(T, span) == "unchanged"
+
+
+class _Field:
+    def __init__(self, value):
+        self.value, self.focused = value, True
+
+    def read(self):
+        return self.value
+
+    def has_focus(self):
+        return self.focused
+
+
+def _run_watch(field, steps):
+    got = []
+    w = EditWatcher(lambda *a: got.append(a), field_factory=lambda: field, watch_seconds=20, poll=0.05)
+    w.watch("id", T)
+    time.sleep(0.5)
+    for step in steps:
+        step()
+        time.sleep(0.3)
+    deadline = time.time() + 3
+    while not got and time.time() < deadline:
+        time.sleep(0.05)
+    return got
+
+
+def test_the_watch_ends_when_you_leave_the_field():
+    field = _Field(T)
+    fixed = T.replace("Kabir nets", "Kubernetes")
+    got = _run_watch(field, [lambda: setattr(field, "value", fixed), lambda: setattr(field, "focused", False),
+                             lambda: setattr(field, "value", "something else entirely typed elsewhere")])
+    assert got and got[0][2:4] == ("corrected", fixed)
+
+
+def test_sending_the_message_keeps_what_it_said_before_it_was_sent():
+    field = _Field(T)
+    fixed = T.replace("Maria", "Priya")
+    got = _run_watch(field, [lambda: setattr(field, "value", fixed), lambda: setattr(field, "value", "")])
+    assert got and got[0][2:4] == ("corrected", fixed)
