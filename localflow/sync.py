@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 # Settings that describe this machine rather than how you like to dictate: never copied.
 DEVICE_ONLY = {"input_device", "device", "claude_path", "codex_path", "last_update_check", "setup_seen",
                "polish_verified", "account_email", "device_name", "last_sync", "auto_update_check",
-               "copied_settings_once"}
+               "copied_settings_once", "gpu_offer_declined"}
 # Hotkeys use different keys on Windows and macOS: only copied between the same kind of computer.
 HOTKEYS = {"hotkey", "paste_last_hotkey", "feedback_hotkey", "live_hotkey", "live_pause_hotkey", "lock_key"}
 

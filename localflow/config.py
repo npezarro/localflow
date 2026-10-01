@@ -49,7 +49,8 @@ DEFAULTS = {
     "codex_path": "",
     "language": "en",  # "auto" to detect
     "beam_size": 1,  # 1 = fast (measured as accurate as 5 on our clips, 10-20% quicker); 5 = thorough
-    "device": "auto",  # "auto" = NVIDIA GPU when GPU support is downloaded, else CPU; "cpu" = always CPU
+    "device": "auto",
+    "gpu_offer_declined": False,  # said "not now" to downloading GPU support (Processor: Auto)  # "auto" = NVIDIA GPU when GPU support is downloaded, else CPU; "cpu" = always CPU
     "background_transcribe": True,  # transcribe finished stretches while you talk (shorter wait on long dictations)
     "input_device": None,  # None = system default microphone
     "warm_mic": True,  # keep the mic open so the first word isn't clipped

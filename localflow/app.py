@@ -1034,6 +1034,7 @@ class App:
             self.set_status("Ready · %s" % self._engine_label())
             self.settings.refresh_gpu()
             self.settings.refresh_apple()
+            self.root.after(300, self._check_gpu)
             if IS_MAC and self.listener and not self.listener.is_trusted:
                 self.set_status("Hotkeys blocked: allow LocalFlow in Privacy & Security > "
                                 "Accessibility and Input Monitoring, then restart", warn=True)
@@ -1318,7 +1319,8 @@ class App:
             base, model, _k = pipeline.cloud_settings(self.cfg)
             label = "%s (%s)" % (model, self.cfg["cloud_provider"])
         else:
-            label = "%s · %s" % (self.cfg["model"], "GPU" if self.transcriber.device == "cuda" else "CPU")
+            label = "%s · %s" % (self.cfg["model"], {"cuda": "NVIDIA GPU", "apple": "Apple GPU"}.get(
+                self.transcriber.device, "CPU"))
         if self.cfg["polish"] != "off":
             label += " + %s clean-up" % self.cfg["polish"]
         return label
@@ -1348,6 +1350,59 @@ class App:
             self.ui_q.put(("dialog", "Speed test", msg))
 
         threading.Thread(target=run, daemon=True, name="speed-test").start()
+
+    def _gpu_situation(self):
+        """-> (kind, problem). kind: "nvidia"/"apple" if this computer has a GPU LocalFlow could
+        use; problem: None if it's in use, "missing" if its support isn't downloaded, else why not."""
+        from . import apple_gpu, gpu
+
+        t = self.transcriber
+        if apple_gpu.IS_APPLE_SILICON:
+            if t.device == "apple":
+                return "apple", None
+            if not apple_gpu.installed():
+                return "apple", "missing"
+            if not apple_gpu.supports(self.cfg["model"]):
+                return "apple", "%s has no Apple GPU version" % self.cfg["model"]
+            return "apple", t.device_error or "it didn't load"
+        if IS_WIN and gpu.nvidia_present():
+            if t.device == "cuda":
+                return "nvidia", None
+            if not gpu.libraries_present() and (not t.device_error or "not found" in t.device_error
+                                                or "cannot be loaded" in t.device_error):
+                return "nvidia", "missing"
+            return "nvidia", t.device_error or "it didn't load"
+        return None, "no compatible GPU was found on this computer"
+
+    def _check_gpu(self):
+        """After a model loads: offer GPU support, or say plainly why a chosen GPU isn't used."""
+        want = self.cfg.get("device", "auto")
+        if want == "cpu" or self.transcriber.device in ("cuda", "apple"):
+            return
+        kind, problem = self._gpu_situation()
+        name = {"nvidia": "NVIDIA GPU", "apple": "Apple GPU"}.get(kind, "GPU")
+        size = {"nvidia": "about 1 GB", "apple": "about 45 MB"}.get(kind, "")
+        if problem == "missing":
+            if want == "auto" and self.cfg.get("gpu_offer_declined"):
+                return
+            if messagebox.askyesno("LocalFlow", "This computer has an %s, but LocalFlow is transcribing on the "
+                                   "CPU because GPU support isn't downloaded yet.\n\nDownload it now (%s, once)? "
+                                   "Larger models like large-v3-turbo get several times faster." % (name, size),
+                                   parent=self.root):
+                status = lambda msg: self.set_status(msg)  # noqa: E731
+                (self.download_apple_gpu if kind == "apple" else self.download_gpu)(status)
+            elif want == "auto":
+                self.cfg["gpu_offer_declined"] = True
+                config.save(self.cfg)
+            else:
+                self.set_status("%s chosen, but its support isn't downloaded: transcribing on the CPU "
+                                "(Settings → Transcription)." % name, warn=True)
+            return
+        if want in ("cuda", "apple"):  # chosen explicitly but not working: say so
+            msg = "%s isn't being used: %s. Transcribing on the CPU for now." % (name, problem)
+            self.set_status(msg, warn=True)
+            self.show_overlay("message", "GPU not in use: transcribing on the CPU")
+            messagebox.showwarning("LocalFlow", msg, parent=self.root)
 
     def download_apple_gpu(self, progress):
         """Fetch MLX (Apple Silicon GPU), then reload the model on the GPU."""

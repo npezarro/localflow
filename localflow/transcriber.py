@@ -101,10 +101,16 @@ class Transcriber:
             try:
                 gpu.activate()
                 model = WhisperModel(target, device="cuda", compute_type="int8", download_root=download_root)
+                # Loading "succeeds" even when cuBLAS/cuDNN are missing; the failure only shows on
+                # the first transcription. Run one now (it also warms the GPU up).
+                warm = (np.random.default_rng(0).standard_normal(16000) * 0.01).astype(np.float32)
+                list(model.transcribe(warm, language="en", beam_size=1, vad_filter=False,
+                                      without_timestamps=False)[0])
                 self.device = "cuda"
             except Exception as exc:
                 log.warning("GPU load failed (%s); using the CPU", exc)
                 self.device_error = str(exc)[:200]
+                model = None
         if model is None:
             model = WhisperModel(target, device="cpu", compute_type="int8", cpu_threads=threads,
                                  download_root=download_root)

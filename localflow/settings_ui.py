@@ -39,6 +39,8 @@ FLOATS = {"release_tail": "Keep listening after release", "preroll": "Keep befor
 DEVICES = [("auto", "Auto (GPU when available)"), ("cpu", "CPU only")]
 if sys.platform == "darwin" and platform.machine() == "arm64":
     DEVICES.insert(1, ("apple", "Apple GPU (MLX)"))
+elif sys.platform == "win32":
+    DEVICES.insert(1, ("cuda", "NVIDIA GPU"))
 BEAMS = [(1, "Fast (recommended)"), (5, "Thorough")]
 TYPE_INTO = [("all", "All apps"), ("only", "Only the apps listed below"),
              ("except", "All apps except those listed below")]
@@ -88,6 +90,7 @@ class SettingsPanel:
         ttk.Button(footer, text="Open data folder", command=self.open_data).pack(side="right", padx=6)
 
         self._build()
+        self._guard_wheel(self.body)
         self.load(app.cfg)
 
     # ------------------------------------------------------------------ layout helpers
@@ -129,6 +132,22 @@ class SettingsPanel:
     def _combo(self, frame, key, values, width=18, readonly=True):
         return ttk.Combobox(frame, textvariable=self._var(key), values=values, width=width,
                             state="readonly" if readonly else "normal")
+
+    def _guard_wheel(self, widget):
+        for child in widget.winfo_children():
+            if isinstance(child, (ttk.Combobox, ttk.Spinbox)):
+                self._wheel_scrolls_page(child)
+            self._guard_wheel(child)
+
+    def _wheel_scrolls_page(self, widget):
+        """Tk's dropdowns and number boxes change their value on the mouse wheel, so scrolling
+        the page past one silently changes a setting. Make the wheel scroll the page instead."""
+        def scroll(event):
+            self._wheel(event)
+            return "break"  # stop the widget's own wheel handling
+
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            widget.bind(seq, scroll)
 
     def _text(self, frame, height=3):
         widget = tk.Text(frame, height=height, width=40, wrap="word", undo=True)
@@ -228,8 +247,8 @@ class SettingsPanel:
                   "accurate but slow. With an NVIDIA GPU: large-v3-turbo is the most accurate and "
                   "still fast (about 1 s for a short dictation).")
         self._row(s, "Processor", self._combo(s, "device", [lbl for _k, lbl in DEVICES], 34),
-                  "Auto uses an NVIDIA GPU once GPU support is downloaded (about 3-5x faster), "
-                  "otherwise the CPU.")
+                  "Auto uses a GPU once its support is downloaded (about 3-5x faster), otherwise the "
+                  "CPU. Choosing the GPU itself makes LocalFlow tell you whenever it can't use it.")
         if sys.platform == "win32":
             f = ttk.Frame(s)
             self.gpu_btn = ttk.Button(f, text="Download GPU support (about 1 GB)", command=self._gpu_download)
