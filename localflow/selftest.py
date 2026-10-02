@@ -70,6 +70,20 @@ def run(argv):
         result["transcribe_s"] = round(time.time() - t0, 2)
         result["audio_s"] = round(len(samples) / audio.SAMPLE_RATE, 2)
         result["text"] = textproc.clean(raw, cfg)
+        _step("https")
+        result["tls_cafile"] = os.environ.get("SSL_CERT_FILE", "")
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen("https://github.com/npezarro/localflow", timeout=20) as resp:
+                result["https"] = "ok %d" % resp.status
+        except Exception as exc:
+            result["https"] = "failed: %s" % exc
+        if sys.platform == "darwin" and paths.is_frozen():
+            inside = os.path.realpath(result["tls_cafile"] or "/none").startswith(os.path.realpath(paths.bundle_dir()))
+            if not inside or not result["https"].startswith("ok"):
+                raise RuntimeError("HTTPS isn't using the bundled CA file (%s): %s"
+                                   % (result["tls_cafile"] or "not set", result["https"]))
         _step("clipboard")
         try:
             from . import output

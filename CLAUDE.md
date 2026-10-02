@@ -29,4 +29,5 @@ Python 3.12, faster-whisper (CTranslate2, CPU int8), pynput hotkeys, sounddevice
 - Windows desktop E2E harnesses must find their target window by process and verify it's in front before sending any key (`GetForegroundWindow()` after launching grabs whatever the user had open).
 - CUDA: `WhisperModel(device="cuda")` loads fine without cuBLAS/cuDNN and only fails on the first transcribe, so `Transcriber.load` runs a warm-up transcription before reporting `device == "cuda"`. Never trust the load alone.
 - Settings dropdowns/number boxes: Tk changes their value on the mouse wheel; `SettingsPanel._guard_wheel` makes the wheel scroll the page instead (new ones are covered automatically).
+- macOS HTTPS: the frozen app's OpenSSL looks for a CA file at a build-machine path that users' Macs don't have, so urllib failed with CERTIFICATE_VERIFY_FAILED on real Macs while CI (which has the file) passed. `__main__._setup_tls` points SSL_CERT_FILE at the bundled certifi; the selftest fails on macOS unless HTTPS works through that bundled file.
 - Tests: `python -m pytest -q` (test_selftest downloads tiny.en on first run).

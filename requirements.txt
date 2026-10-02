@@ -7,6 +7,7 @@ numpy<3
 pynput==1.8.2
 pyperclip==1.11.0
 keyring==25.7.0
+certifi>=2024.2.2  # CA bundle for HTTPS on macOS (see __main__._setup_tls)
 pystray==0.19.5; sys_platform == "win32"
 comtypes==1.4.11; sys_platform == "win32"
 Pillow>=10; sys_platform == "win32"

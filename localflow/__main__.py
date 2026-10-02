@@ -14,7 +14,24 @@ def _setup_logging():
     logging.basicConfig(level=logging.INFO, handlers=[handler])
 
 
+def _setup_tls():
+    """Python's OpenSSL doesn't use the macOS Keychain; it looks for a CA file at a path baked
+    in at build time, which exists on the build machine but not on users' Macs, so every
+    HTTPS request through urllib failed with CERTIFICATE_VERIFY_FAILED. Use the CA bundle we
+    ship (certifi, Mozilla's list) unless the user configured their own."""
+    if sys.platform != "darwin" or os.environ.get("SSL_CERT_FILE"):
+        return
+    try:
+        import certifi
+
+        if os.path.exists(certifi.where()):
+            os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        pass
+
+
 def main():
+    _setup_tls()
     _setup_logging()
     if "--update-now" in sys.argv:  # check + download + hand over to the installer (tests/CI)
         from .update import run_cli
