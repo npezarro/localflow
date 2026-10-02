@@ -33,18 +33,21 @@ def test_ignores_things_that_are_not_corrections(after):
 
 def test_watcher_reports_an_edit_from_a_field():
     class Field:
-        value = "x " + T
+        value, reads = "x " + T, 0
 
         def read(self):
+            self.reads += 1
             return self.value
 
     field = Field()
     got = []
     w = EditWatcher(lambda *a: got.append(a), field_factory=lambda: field, watch_seconds=5, poll=0.1)
     w.watch("id1", T)
-    time.sleep(0.6)
+    deadline = time.time() + 5
+    while not field.reads and time.time() < deadline:  # edit only after the baseline read
+        time.sleep(0.02)
     field.value = "x " + T.replace("Kabir nets", "Kubernetes")
-    time.sleep(0.3)
+    time.sleep(0.5)
     w.stop()  # e.g. the next dictation started
     deadline = time.time() + 2
     while not got and time.time() < deadline:
