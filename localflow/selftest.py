@@ -80,7 +80,8 @@ def run(argv):
         except Exception as exc:
             result["https"] = "failed: %s" % exc
         if sys.platform == "darwin" and paths.is_frozen():
-            inside = os.path.realpath(result["tls_cafile"] or "/none").startswith(os.path.realpath(paths.bundle_dir()))
+            app = os.path.realpath(os.path.join(os.path.dirname(sys.executable), ".."))  # .app/Contents
+            inside = os.path.realpath(result["tls_cafile"] or "/none").startswith(app + os.sep)
             if not inside or not result["https"].startswith("ok"):
                 raise RuntimeError("HTTPS isn't using the bundled CA file (%s): %s"
                                    % (result["tls_cafile"] or "not set", result["https"]))

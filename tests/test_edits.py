@@ -92,7 +92,10 @@ class _Field:
     def __init__(self, value):
         self.value, self.focused = value, True
 
+    reads = 0
+
     def read(self):
+        self.reads += 1
         return self.value
 
     def has_focus(self):
@@ -103,7 +106,10 @@ def _run_watch(field, steps):
     got = []
     w = EditWatcher(lambda *a: got.append(a), field_factory=lambda: field, watch_seconds=20, poll=0.05)
     w.watch("id", T)
-    time.sleep(0.5)
+    deadline = time.time() + 5
+    while not field.reads and time.time() < deadline:  # slow CI: edit only after the baseline read
+        time.sleep(0.02)
+    time.sleep(0.1)
     for step in steps:
         step()
         time.sleep(0.3)
