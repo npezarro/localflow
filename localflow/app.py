@@ -2,6 +2,7 @@ import logging
 import os
 import queue
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -104,9 +105,33 @@ class App:
         self.account_sync.start()
         if self.cfg["live_autostart"]:
             self.root.after(1500, lambda: self.ctl_q.put(("continuous",)))
-        if IS_MAC and not platform_fix.macos_accessibility_trusted(prompt=True):
-            self.set_status("Grant Accessibility + Input Monitoring in System Settings, then restart",
-                            warn=True)
+        if IS_MAC and not platform_fix.macos_accessibility_trusted(prompt=False):
+            self.root.after(1500, self.macos_permissions_help)
+
+    def macos_permissions_help(self):
+        """macOS hasn't granted Accessibility: explain the fix, including the stale-entry case
+        (an older LocalFlow build in the list, switched on, that no longer applies)."""
+        self.set_status("Hotkeys need Accessibility and Input Monitoring permission", warn=True)
+        win = tk.Toplevel(self.root)
+        win.title("LocalFlow needs two permissions")
+        win.transient(self.root)
+        ttk.Label(win, padding=(14, 12, 14, 6), wraplength=px(460), justify="left", text=(
+            "To hear your hotkey and type text, LocalFlow needs Accessibility and Input Monitoring "
+            "(System Settings → Privacy & Security).\n\n"
+            "If LocalFlow is already listed and switched on, that entry belongs to an older copy: "
+            "select it, click the minus (−) button to remove it, then click plus (+) and add "
+            "LocalFlow from Applications again. Do this in both lists, then quit and reopen LocalFlow.\n\n"
+            "From this version on, updates keep these permissions, so you won't need to do this again."
+        )).pack(fill="x")
+        row = ttk.Frame(win, padding=(14, 6, 14, 14))
+        row.pack(fill="x")
+        base = "x-apple.systempreferences:com.apple.preference.security?"
+        ttk.Button(row, text="Open Accessibility", command=lambda: subprocess.Popen(
+            ["open", base + "Privacy_Accessibility"])).pack(side="left")
+        ttk.Button(row, text="Open Input Monitoring", command=lambda: subprocess.Popen(
+            ["open", base + "Privacy_ListenEvent"])).pack(side="left", padx=6)
+        ttk.Button(row, text="Quit LocalFlow", command=self.quit).pack(side="right")
+        platform_fix.macos_accessibility_trusted(prompt=True)  # also adds LocalFlow to the list
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -1036,8 +1061,8 @@ class App:
             self.settings.refresh_apple()
             self.root.after(300, self._check_gpu)
             if IS_MAC and self.listener and not self.listener.is_trusted:
-                self.set_status("Hotkeys blocked: allow LocalFlow in Privacy & Security > "
-                                "Accessibility and Input Monitoring, then restart", warn=True)
+                self.set_status("Hotkeys blocked: LocalFlow needs Accessibility and Input Monitoring "
+                                "(see the window that opened)", warn=True)
         elif kind == "model_failed":
             self.set_status("Could not load %s: %s" % (ev[1], ev[2][:120]), color=RED)
             if ev[1] != self.transcriber.model_name and self.transcriber.model is not None:

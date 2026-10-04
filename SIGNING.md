@@ -62,6 +62,8 @@ signed, notarized and stapled too. Even without these secrets, CI already signs 
 the hardened runtime and runs the app under it, so the switch to a real certificate doesn't
 change how the app runs.
 
+**Until then (stable self-signed identity):** if the secrets `MACOS_SELF_SIGN_P12` and `MACOS_SELF_SIGN_PASSWORD` exist (a self-signed code-signing certificate, CN `LocalFlow Self-Signed`, exported with `openssl pkcs12 -export -legacy`), CI signs every Mac build with it. Gatekeeper still warns, but macOS ties Accessibility / Input Monitoring / Microphone grants to that identity, so they survive updates. Users re-grant once when switching from the ad-hoc builds.
+
 Signing also fixes a macOS update annoyance: an ad-hoc-signed app has a new identity every
 build, so macOS asks for Accessibility and Input Monitoring again after each update. A
 Developer ID signature keeps the same identity across versions.

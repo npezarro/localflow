@@ -242,6 +242,8 @@ jobs:
         env:
           MAC_P12: ${{ secrets.MACOS_CERT_P12 }}
           MAC_P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          SELF_P12: ${{ secrets.MACOS_SELF_SIGN_P12 }}
+          SELF_P12_PASSWORD: ${{ secrets.MACOS_SELF_SIGN_PASSWORD }}
           ASC_KEY: ${{ secrets.APPLE_API_KEY_P8 }}
           ASC_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           ASC_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
@@ -259,11 +261,27 @@ jobs:
             [ -n "$identity" ] || { echo "::error::no Developer ID Application identity in MACOS_CERT_P12"; exit 1; }
             echo "$ASC_KEY" | base64 --decode > "$RUNNER_TEMP/asc.p8"
             notarize() { xcrun notarytool submit "$1" --key "$RUNNER_TEMP/asc.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER" --wait --timeout 30m; }
+          elif [ -n "$SELF_P12" ]; then
+            # No Apple Developer ID: sign every build with the same self-signed certificate.
+            # Gatekeeper still warns (not notarized), but macOS keys Accessibility / Input
+            # Monitoring / Microphone grants on this stable identity, so updates keep them
+            # (ad-hoc signatures change every build and silently orphan the grants).
+            kc="$RUNNER_TEMP/selfsign.keychain-db"; kcpass=$(uuidgen)
+            security create-keychain -p "$kcpass" "$kc"
+            security set-keychain-settings -lut 21600 "$kc"
+            security unlock-keychain -p "$kcpass" "$kc"
+            echo "$SELF_P12" | base64 --decode > "$RUNNER_TEMP/self.p12"
+            security import "$RUNNER_TEMP/self.p12" -P "$SELF_P12_PASSWORD" -A -f pkcs12 -k "$kc"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpass" "$kc" >/dev/null
+            security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+            identity="LocalFlow Self-Signed"
+            export SIGN_TIMESTAMP=none
           else
             identity="-"
           fi
           scripts/macos_sign.sh "$identity" dist/LocalFlow.app
-          if [ "$identity" != "-" ]; then
+          codesign -d --requirements - dist/LocalFlow.app 2>&1 | grep designated || true
+          if [ "$identity" != "-" ] && [ "$identity" != "LocalFlow Self-Signed" ]; then
             ditto -c -k --keepParent dist/LocalFlow.app "$RUNNER_TEMP/notarize.zip"
             notarize "$RUNNER_TEMP/notarize.zip"
             xcrun stapler staple dist/LocalFlow.app
@@ -290,7 +308,7 @@ jobs:
             if [ "$attempt" = 5 ]; then exit 1; fi
             echo "hdiutil busy, retrying ($attempt)"; sleep $((attempt * 5))
           done
-          if [ "$identity" != "-" ]; then
+          if [ "$identity" != "-" ] && [ "$identity" != "LocalFlow Self-Signed" ]; then
             codesign --force --timestamp --sign "$identity" "${{ matrix.artifact }}.dmg"
             notarize "${{ matrix.artifact }}.dmg"
             xcrun stapler staple "${{ matrix.artifact }}.dmg"

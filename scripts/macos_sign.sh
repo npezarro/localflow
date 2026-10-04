@@ -6,7 +6,7 @@
 set -euo pipefail
 identity="$1"; app="$2"
 ent="$(cd "$(dirname "$0")/.." && pwd)/installer/entitlements.plist"
-ts=(--timestamp); [ "$identity" = "-" ] && ts=(--timestamp=none)
+ts=(--timestamp); { [ "$identity" = "-" ] || [ "${SIGN_TIMESTAMP:-}" = "none" ]; } && ts=(--timestamp=none)
 # 1) every nested Mach-O binary (dylibs, .so modules, helper executables), deepest first
 find "$app/Contents" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -u+x \) -print0 |
   while IFS= read -r -d '' f; do

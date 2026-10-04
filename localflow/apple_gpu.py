@@ -202,17 +202,44 @@ def activate():
     _activated = True
 
 
+DONE_MARKER = ".localflow-complete"
+
+
+def _weights_ok(path):
+    """Is the downloaded weights file whole? (An interrupted download leaves a truncated
+    weights.npz that MLX rejects with "[load_npz] Input must be a zip file".)"""
+    npz, st = os.path.join(path, "weights.npz"), os.path.join(path, "weights.safetensors")
+    if os.path.isfile(st):
+        try:
+            with open(st, "rb") as f:
+                header = int.from_bytes(f.read(8), "little")  # safetensors: header length, then JSON
+                return 0 < header < 100_000_000 and os.path.getsize(st) > 8 + header
+        except OSError:
+            return False
+    return os.path.isfile(npz) and zipfile.is_zipfile(npz)
+
+
 def model_path(name, progress=lambda msg, frac: None):
-    """Local folder with the MLX version of ``name``, downloading it the first time."""
+    """Local folder with the MLX version of ``name``, downloading it the first time. A model
+    only counts as downloaded once its weights were checked whole (marker file)."""
     repo = MODELS.get(name)
     if not repo:
         raise RuntimeError("%s has no Apple GPU version" % name)
     path = os.path.join(paths.models_dir(), "mlx", repo)
-    if not os.path.isfile(os.path.join(path, "config.json")):
-        from huggingface_hub import snapshot_download
+    if os.path.isfile(os.path.join(path, DONE_MARKER)):
+        return path
+    if os.path.isdir(path) and not _weights_ok(path):
+        log.warning("MLX model %s is incomplete (interrupted download?); downloading it again", name)
+        shutil.rmtree(path, ignore_errors=True)
+    from huggingface_hub import snapshot_download
 
-        progress("Downloading %s for the Apple GPU" % name, 0.0)
-        snapshot_download(repo_id="mlx-community/" + repo, local_dir=path)
+    progress("Downloading %s for the Apple GPU" % name, None)
+    snapshot_download(repo_id="mlx-community/" + repo, local_dir=path)
+    if not _weights_ok(path):
+        shutil.rmtree(path, ignore_errors=True)
+        raise RuntimeError("the %s download for the Apple GPU was incomplete; try again" % name)
+    with open(os.path.join(path, DONE_MARKER), "w") as f:
+        f.write("ok\n")
     return path
 
 
@@ -228,7 +255,15 @@ class MLXModel:
         self.name = name
         self.path = path or model_path(name)
         self._mw = mlx_whisper
-        ModelHolder.get_model(self.path, mx.float16)  # load now, not on the first dictation
+        try:
+            ModelHolder.get_model(self.path, mx.float16)  # load now, not on the first dictation
+        except Exception as exc:
+            if path or "zip" not in str(exc).lower() and "safetensors" not in str(exc).lower():
+                raise
+            log.warning("MLX weights for %s unreadable (%s); downloading them again", name, exc)
+            shutil.rmtree(self.path, ignore_errors=True)
+            self.path = model_path(name)
+            ModelHolder.get_model(self.path, mx.float16)
         # The GPU's first run compiles its kernels (seconds); do it now rather than on the
         # first dictation.
         self.transcribe(np.zeros(16000, dtype=np.float32), "en", temperature=0.0, sample_len=8)
