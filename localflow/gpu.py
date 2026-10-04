@@ -141,28 +141,41 @@ class RemoteFile:
 
 
 def download(progress=lambda msg, frac: None):
-    """Fetch only the needed DLLs from NVIDIA's official wheels into data/gpu/. Returns MB installed."""
+    """Fetch only the needed DLLs from NVIDIA's official wheels into data/gpu/. Returns MB installed.
+    ``progress(message, fraction or None)`` is called often: None while preparing, then the
+    overall fraction of the whole download (not per file)."""
+    import time
+
     os.makedirs(gpu_dir(), exist_ok=True)
+    progress("Finding NVIDIA's GPU libraries…", None)
     got = {"bytes": 0}
+    plan = []  # (zipfile, member) for every DLL we need, across both wheels
     for pkg, major in PACKAGES.items():
         version, url, _size = _wheel_url(pkg, major)
-        remote = RemoteFile(url, lambda n: got.__setitem__("bytes", got["bytes"] + n))
-        with zipfile.ZipFile(remote) as z:
-            members = [i for i in z.infolist() if os.path.basename(i.filename) in KEEP]
-            for info in members:
-                target = os.path.join(gpu_dir(), os.path.basename(info.filename))
-                tmp = target + ".part"
-                done = 0
-                with z.open(info) as src, open(tmp, "wb") as dst:
-                    while True:
-                        chunk = src.read(1 << 20)
-                        if not chunk:
-                            break
-                        dst.write(chunk)
-                        done += len(chunk)
-                        progress("Downloading %s %s (%s)" % (pkg, version, os.path.basename(target)),
-                                 min(1.0, done / max(info.file_size, 1)))
-                os.replace(tmp, target)
+        progress("Reading %s %s…" % (pkg, version), None)
+        z = zipfile.ZipFile(RemoteFile(url, lambda n: got.__setitem__("bytes", got["bytes"] + n)))
+        plan += [(z, i) for i in z.infolist() if os.path.basename(i.filename) in KEEP]
+    total = sum(i.file_size for _z, i in plan) or 1
+    done, start, last = 0, time.monotonic(), 0.0
+    for z, info in plan:
+        target = os.path.join(gpu_dir(), os.path.basename(info.filename))
+        tmp = target + ".part"
+        with z.open(info) as src, open(tmp, "wb") as dst:
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                done += len(chunk)
+                now = time.monotonic()
+                if now - last > 0.25 or done == total:
+                    last = now
+                    speed = done / max(now - start, 0.1) / 1e6
+                    progress("Downloading GPU support: %d of %d MB (%.0f MB/s)"
+                             % (done / 1e6, total / 1e6, speed), done / total)
+        os.replace(tmp, target)
+    for z in {z for z, _i in plan}:
+        z.close()
     log.info("GPU support: downloaded %.0f MB", got["bytes"] / 1e6)
     return round(sum(os.path.getsize(os.path.join(gpu_dir(), f)) for f in os.listdir(gpu_dir())) / 1e6)
 

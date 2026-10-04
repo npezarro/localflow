@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 from .ui import px
 
 from . import cloud, config, hotkey, keystore, paths
+from .search import fuzzy_match
 
 IS_MAC = sys.platform == "darwin"
 MUTED = "#6b6f78"
@@ -63,6 +64,16 @@ class SettingsPanel:
         self.vars = {}
         self.key_vars = {}
 
+        bar = ttk.Frame(parent, padding=(0, 0, 0, 6))
+        bar.pack(fill="x")
+        ttk.Label(bar, text="Search settings").pack(side="left")
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(bar, textvariable=self.search_var)
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=6)
+        self.search_entry.bind("<Escape>", lambda _e: self.search_var.set(""))
+        self.search_hint = tk.StringVar(value="e.g. gpu, hotkey, microphone, sync")
+        ttk.Label(bar, textvariable=self.search_hint, foreground=MUTED).pack(side="left")
+        self._sections = []
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True)
         canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0)
@@ -91,6 +102,8 @@ class SettingsPanel:
 
         self._build()
         self._guard_wheel(self.body)
+        self._index_rows()
+        self.search_var.trace_add("write", lambda *_: self.filter(self.search_var.get()))
         self.load(app.cfg)
 
     # ------------------------------------------------------------------ layout helpers
@@ -110,6 +123,7 @@ class SettingsPanel:
     def _section(self, title):
         frame = ttk.LabelFrame(self.body, text=title, padding=(10, 6))
         frame.pack(fill="x", pady=(0, 10))
+        self._sections.append(frame)
         frame.columnconfigure(1, weight=1)
         frame._row = 0
         return frame
@@ -132,6 +146,58 @@ class SettingsPanel:
     def _combo(self, frame, key, values, width=18, readonly=True):
         return ttk.Combobox(frame, textvariable=self._var(key), values=values, width=width,
                             state="readonly" if readonly else "normal")
+
+    # ------------------------------------------------------------------ search
+    def _index_rows(self):
+        """Group each section's widgets into settings: a grid row plus the note rows under it."""
+        self._rows = {}
+        for sec in self._sections:
+            by_row = {}
+            for w in sec.grid_slaves():
+                by_row.setdefault(int(w.grid_info()["row"]), []).append(w)
+            groups = []
+            for r in sorted(by_row):
+                ws = by_row[r]
+                is_note = all(isinstance(w, ttk.Label) and str(w.cget("foreground")) == MUTED for w in ws)
+                if is_note and groups:
+                    groups[-1].extend(ws)
+                else:
+                    groups.append(list(ws))
+            self._rows[sec] = groups
+
+    @staticmethod
+    def _text_of(widget):
+        parts = []
+        try:
+            parts.append(str(widget.cget("text")))
+        except tk.TclError:
+            pass
+        if isinstance(widget, ttk.Combobox):
+            parts.extend(str(v) for v in widget.cget("values"))
+        for child in widget.winfo_children():
+            parts.append(SettingsPanel._text_of(child))
+        return " ".join(p for p in parts if p)
+
+    def filter(self, query):
+        """Show only the settings matching ``query`` (all of them when it's empty)."""
+        query = query.strip()
+        for sec in self._sections:
+            sec.pack_forget()
+        shown = 0
+        for sec in self._sections:
+            whole = not query or fuzzy_match(query, sec.cget("text"))
+            visible = 0
+            for group in self._rows[sec]:
+                ok = whole or fuzzy_match(query, " ".join(self._text_of(w) for w in group))
+                for w in group:
+                    w.grid() if ok else w.grid_remove()
+                visible += ok
+            if visible:
+                sec.pack(fill="x", pady=(0, 10))
+                shown += 1
+        self.search_hint.set("e.g. gpu, hotkey, microphone, sync" if not query else
+                             "no settings match" if not shown else "%d section%s" % (shown, "s" * (shown != 1)))
+        self.canvas.yview_moveto(0)
 
     def _guard_wheel(self, widget):
         for child in widget.winfo_children():
@@ -253,6 +319,7 @@ class SettingsPanel:
             f = ttk.Frame(s)
             self.gpu_btn = ttk.Button(f, text="Download GPU support (about 1 GB)", command=self._gpu_download)
             self.gpu_btn.pack(side="left")
+            self.gpu_bar = ttk.Progressbar(f, length=px(150), maximum=100)
             self.gpu_status = tk.StringVar()
             ttk.Label(f, textvariable=self.gpu_status, foreground=MUTED, wraplength=px(380)).pack(side="left", padx=8)
             self._row(s, "NVIDIA GPU", f)
@@ -263,6 +330,7 @@ class SettingsPanel:
             self.apple_btn = ttk.Button(f, text="Download Apple GPU support (about 45 MB)",
                                         command=self._apple_download)
             self.apple_btn.pack(side="left")
+            self.apple_bar = ttk.Progressbar(f, length=px(150), maximum=100)
             self.apple_status = tk.StringVar()
             ttk.Label(f, textvariable=self.apple_status, foreground=MUTED, wraplength=px(380)).pack(side="left", padx=8)
             self._row(s, "Apple GPU", f, "Runs Whisper on your Mac's GPU with Apple's MLX (often several times "
@@ -461,7 +529,8 @@ class SettingsPanel:
 
         t = self.app.transcriber
         if gpu.libraries_present():
-            self.gpu_btn.configure(text="Remove GPU support", command=self._gpu_remove)
+            self.gpu_bar.pack_forget()  # download finished and the model reloaded
+            self.gpu_btn.configure(text="Remove GPU support", command=self._gpu_remove, state="normal")
             if t.device == "cuda":
                 self.gpu_status.set("Installed and in use.")
             else:
@@ -482,6 +551,7 @@ class SettingsPanel:
 
         t = self.app.transcriber
         if apple_gpu.installed():
+            self.apple_bar.pack_forget()
             self.apple_btn.configure(text="Remove Apple GPU support", command=self._apple_remove, state="normal")
             if t.device == "apple":
                 self.apple_status.set("Installed and in use.")
@@ -498,8 +568,30 @@ class SettingsPanel:
             self.apple_status.set("Uses the CPU until you download it.")
 
     def _apple_download(self):
-        self.apple_btn.configure(state="disabled")
-        self.app.download_apple_gpu(self.apple_status.set)
+        self.start_download("apple")
+
+    def start_download(self, kind):
+        """Run a GPU-support download with a visible progress bar beside its button."""
+        btn, bar, status = ((self.apple_btn, self.apple_bar, self.apple_status) if kind == "apple"
+                            else (self.gpu_btn, self.gpu_bar, self.gpu_status))
+        btn.configure(state="disabled")
+        bar.pack(side="left", padx=(8, 0), before=btn.master.winfo_children()[-1])
+        bar.configure(mode="indeterminate", value=0)
+        bar.start(15)
+        status.set("Starting the download…")
+
+        def report(msg, frac):
+            status.set(msg.split(": ", 1)[-1] if msg.startswith("Downloading") else msg)  # full text: status line
+            if frac is None:
+                return  # preparing: the bar keeps moving
+            bar.stop()
+            if frac < 0:
+                bar.pack_forget()
+                btn.configure(state="normal")
+            else:
+                bar.configure(mode="determinate", value=frac * 100)
+
+        (self.app.download_apple_gpu if kind == "apple" else self.app.download_gpu)(report)
 
     def _apple_remove(self):
         from . import apple_gpu
@@ -510,8 +602,7 @@ class SettingsPanel:
             self.refresh_apple()
 
     def _gpu_download(self):
-        self.gpu_btn.configure(state="disabled")
-        self.app.download_gpu(self.gpu_status.set)
+        self.start_download("nvidia")
 
     def _gpu_remove(self):
         from . import gpu

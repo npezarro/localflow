@@ -111,6 +111,9 @@ def download(progress=lambda msg, frac: None):
         raise RuntimeError("Apple GPU support needs a Mac with Apple Silicon")
     if _mac_version() < (14, 0):
         raise RuntimeError("Apple GPU support needs macOS 14 (Sonoma) or later")
+    import time
+
+    progress("Finding Apple GPU support…", None)
     wheels = []
     for package, version in PACKAGES:
         wheel = _pick_wheel(_release_files(package, version))
@@ -121,7 +124,7 @@ def download(progress=lambda msg, frac: None):
     tmp = runtime_dir() + ".partial"
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp)
-    done = 0
+    done, start, last = 0, time.monotonic(), 0.0
     for w in wheels:
         buf = io.BytesIO()
         req = urllib.request.Request(w["url"], headers={"User-Agent": "LocalFlow"})
@@ -131,7 +134,12 @@ def download(progress=lambda msg, frac: None):
                 if not block:
                     break
                 buf.write(block)
-                progress("Downloading Apple GPU support", (done + buf.tell()) / total)
+                now = time.monotonic()
+                if now - last > 0.25:
+                    last = now
+                    have = done + buf.tell()
+                    progress("Downloading Apple GPU support: %d of %d MB (%.0f MB/s)"
+                             % (have / 1e6, total / 1e6, have / max(now - start, 0.1) / 1e6), have / total)
         data = buf.getvalue()
         if hashlib.sha256(data).hexdigest() != w["digests"]["sha256"]:
             shutil.rmtree(tmp, ignore_errors=True)

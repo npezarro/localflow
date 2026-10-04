@@ -1389,8 +1389,8 @@ class App:
                                    "CPU because GPU support isn't downloaded yet.\n\nDownload it now (%s, once)? "
                                    "Larger models like large-v3-turbo get several times faster." % (name, size),
                                    parent=self.root):
-                status = lambda msg: self.set_status(msg)  # noqa: E731
-                (self.download_apple_gpu if kind == "apple" else self.download_gpu)(status)
+                self.nb.select(self.settings_tab)  # show the progress bar next to the button
+                self.settings.start_download(kind)
             elif want == "auto":
                 self.cfg["gpu_offer_declined"] = True
                 config.save(self.cfg)
@@ -1404,37 +1404,43 @@ class App:
             self.show_overlay("message", "GPU not in use: transcribing on the CPU")
             messagebox.showwarning("LocalFlow", msg, parent=self.root)
 
-    def download_apple_gpu(self, progress):
-        """Fetch MLX (Apple Silicon GPU), then reload the model on the GPU."""
-        from . import apple_gpu
+    def download_apple_gpu(self, report=None):
+        self._download_support("apple", report)
+
+    def download_gpu(self, report=None):
+        self._download_support("nvidia", report)
+
+    def _download_support(self, kind, report=None):
+        """Fetch GPU support off the UI thread, then reload the model on the GPU. Progress goes
+        to ``report(message, fraction)`` (Settings' bar), the status line and the pill:
+        fraction None = preparing, 0-1 = downloading, 1 = done, -1 = failed."""
+        from . import apple_gpu, gpu
+
+        module = apple_gpu if kind == "apple" else gpu
+
+        def ui(msg, frac):
+            self.ui_q.put(("call", lambda: self._download_progress(msg, frac, report)))
 
         def run():
             try:
-                mb = apple_gpu.download(lambda msg, frac: self.ui_q.put(
-                    ("call", lambda: progress("%s… %d%%" % (msg, frac * 100)))))
-                self.ui_q.put(("call", lambda: progress("Installed (%d MB). Loading the model on the GPU "
-                                                         "(it downloads once in MLX format)…" % mb)))
+                mb = module.download(ui)
+                ui("Installed (%d MB). Loading the model on the GPU…" % mb, 1.0)
                 self.ui_q.put(("call", lambda: self.load_model(self.cfg["model"])))
             except Exception as exc:
-                err = "Download failed: %s" % exc
-                self.ui_q.put(("call", lambda: progress(err)))
+                log.exception("GPU support download failed")
+                ui("Download failed: %s" % exc, -1)
 
-        threading.Thread(target=run, daemon=True, name="apple-gpu-download").start()
+        ui("Starting the download…", None)
+        threading.Thread(target=run, daemon=True, name="%s-gpu-download" % kind).start()
 
-    def download_gpu(self, progress):
-        """Fetch GPU support, then reload the model on the GPU. Runs off the UI thread."""
-        from . import gpu
-
-        def run():
-            try:
-                mb = gpu.download(lambda msg, frac: self.ui_q.put(("call", lambda: progress("%s… %d%%" % (msg, frac * 100)))))
-                self.ui_q.put(("call", lambda: progress("Installed (%d MB). Loading the model on the GPU…" % mb)))
-                self.ui_q.put(("call", lambda: self.load_model(self.cfg["model"])))
-            except Exception as exc:
-                err = "Download failed: %s" % exc
-                self.ui_q.put(("call", lambda: progress(err)))
-
-        threading.Thread(target=run, daemon=True, name="gpu-download").start()
+    def _download_progress(self, msg, frac, report):
+        self.set_status(msg, warn=frac == -1)
+        if frac is not None and 0 <= frac < 1:
+            self.show_overlay("message", "Downloading GPU support: %d%%" % (frac * 100))
+        else:
+            self.show_overlay("message", msg[:70])
+        if report:
+            report(msg, frac)
 
     # ------------------------------------------------------------------ updates
     def _startup_update_check(self):
