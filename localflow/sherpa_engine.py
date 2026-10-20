@@ -10,6 +10,8 @@ data/models/sherpa/<name>/ and only count as downloaded once every file arrived 
 import hashlib
 import logging
 import os
+import shutil
+import tarfile
 import time
 import urllib.request
 
@@ -42,6 +44,13 @@ MODELS = {
             "tokens.txt": (93939, None),
         },
     },
+    "parakeet-small": {  # 110M parameters: a third of the time, still ahead of small.en
+        "archive": ("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+                    "sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2", 108035095,
+                    "f628312e9fdf8686374cb01a69425c41732529d540860311f16f37cbc32cfe9b"),
+        "files": {"encoder.int8.onnx": (0, None), "decoder.int8.onnx": (0, None),
+                  "joiner.int8.onnx": (0, None), "tokens.txt": (0, None)},
+    },
 }
 DONE_MARKER = ".localflow-complete"
 
@@ -51,7 +60,10 @@ def supports(name):
 
 
 def size_mb(name):
-    return sum(size for size, _sha in MODELS[name]["files"].values()) / 1e6
+    spec = MODELS[name]
+    if "archive" in spec:
+        return spec["archive"][1] / 1e6
+    return sum(size for size, _sha in spec["files"].values()) / 1e6
 
 
 def folder(name):
@@ -70,31 +82,59 @@ def model_path(name, progress=lambda msg, frac: None):
     if is_local(name):
         return path
     os.makedirs(path, exist_ok=True)
-    total = sum(size for size, _sha in spec["files"].values())
-    done, t0 = 0, time.time()
-    for fname, (size, sha) in spec["files"].items():
-        dest = os.path.join(path, fname)
-        if os.path.isfile(dest) and os.path.getsize(dest) == size and (sha is None or _sha256(dest) == sha):
-            done += size
-            continue
-        url = "https://huggingface.co/%s/resolve/%s/%s" % (spec["repo"], spec["rev"], fname)
-        digest = hashlib.sha256()
-        with urllib.request.urlopen(url, timeout=60) as resp, open(dest + ".part", "wb") as out:
-            while True:
-                block = resp.read(1 << 20)
-                if not block:
-                    break
-                out.write(block)
-                digest.update(block)
-                done += len(block)
-                rate = done / 1e6 / max(time.time() - t0, 0.1)
-                progress("Downloading %s: %d of %d MB (%.0f MB/s)" % (name, done / 1e6, total / 1e6, rate), done / total)
-        if os.path.getsize(dest + ".part") != size or (sha and digest.hexdigest() != sha):
-            os.remove(dest + ".part")
-            raise RuntimeError("the %s download was damaged (%s); try again" % (name, fname))
-        os.replace(dest + ".part", dest)
+    if "archive" in spec:
+        url, size, sha = spec["archive"]
+        tmp = os.path.join(path, "download.part")
+        _fetch(url, tmp, size, sha, _Progress(name, size, progress))
+        with tarfile.open(tmp, "r:bz2") as tar:
+            for member in tar.getmembers():
+                base = os.path.basename(member.name)
+                if member.isfile() and base in spec["files"]:
+                    with tar.extractfile(member) as src, open(os.path.join(path, base), "wb") as out:
+                        shutil.copyfileobj(src, out)
+        os.remove(tmp)
+        if not all(os.path.isfile(os.path.join(path, f)) for f in spec["files"]):
+            raise RuntimeError("the %s download is missing files; try again" % name)
+    else:
+        report = _Progress(name, sum(size for size, _sha in spec["files"].values()), progress)
+        for fname, (size, sha) in spec["files"].items():
+            dest = os.path.join(path, fname)
+            if os.path.isfile(dest) and os.path.getsize(dest) == size and (sha is None or _sha256(dest) == sha):
+                report(size)
+                continue
+            url = "https://huggingface.co/%s/resolve/%s/%s" % (spec["repo"], spec["rev"], fname)
+            _fetch(url, dest + ".part", size, sha, report)
+            os.replace(dest + ".part", dest)
     open(os.path.join(path, DONE_MARKER), "w").close()
     return path
+
+
+class _Progress:
+    def __init__(self, name, total, progress):
+        self.name, self.total, self.progress = name, total, progress
+        self.done, self.t0 = 0, time.time()
+
+    def __call__(self, nbytes):
+        self.done += nbytes
+        rate = self.done / 1e6 / max(time.time() - self.t0, 0.1)
+        self.progress("Downloading %s: %d of %d MB (%.0f MB/s)"
+                      % (self.name, self.done / 1e6, self.total / 1e6, rate), self.done / self.total)
+
+
+def _fetch(url, dest, size, sha, report):
+    """Download ``url`` to ``dest``; raise (and delete it) unless size and SHA-256 match."""
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(url, timeout=60) as resp, open(dest, "wb") as out:
+        while True:
+            block = resp.read(1 << 20)
+            if not block:
+                break
+            out.write(block)
+            digest.update(block)
+            report(len(block))
+    if os.path.getsize(dest) != size or (sha and digest.hexdigest() != sha):
+        os.remove(dest)
+        raise RuntimeError("the download was damaged (%s); try again" % os.path.basename(url))
 
 
 def _sha256(path):

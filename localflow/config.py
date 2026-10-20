@@ -78,6 +78,7 @@ DEFAULTS = {
 }
 
 MODEL_CHOICES = [
+    "parakeet-small", "parakeet-v2", "parakeet-v3",  # NVIDIA Parakeet (localflow/sherpa_engine.py)
     "tiny.en", "base.en", "small.en", "medium.en",
     "distil-large-v3", "large-v3-turbo",
     "tiny", "base", "small", "medium",

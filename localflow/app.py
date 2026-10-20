@@ -1066,7 +1066,8 @@ class App:
                                 "(see the window that opened)", warn=True)
         elif kind == "model_failed":
             self.set_status("Could not load %s: %s" % (ev[1], ev[2][:120]), color=RED)
-            if ev[1] != self.transcriber.model_name and self.transcriber.model is not None:
+            t = self.transcriber
+            if ev[1] != t.model_name and (t.model is not None or t.mlx is not None or t.sherpa is not None):
                 self.transcriber.ready.set()  # keep using the previous model
         elif kind == "overlay":
             self.show_overlay(ev[1], ev[2])
