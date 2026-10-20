@@ -1,5 +1,6 @@
 faster-whisper==1.2.1
 ctranslate2==4.8.2
+sherpa-onnx==1.13.8  # Parakeet models (localflow/sherpa_engine.py); brings its own onnxruntime
 onnxruntime==1.30.0; sys_platform != "darwin"
 onnxruntime==1.23.2; sys_platform == "darwin"
 sounddevice==0.5.6

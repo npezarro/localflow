@@ -1000,7 +1000,8 @@ class App:
 
         def run():
             try:
-                self.transcriber.load(name, device=self.cfg.get("device", "auto"))
+                self.transcriber.load(name, device=self.cfg.get("device", "auto"),
+                                      progress=lambda msg, _frac: self.ui_q.put(("status", msg + "…")))
                 self.ui_q.put(("model_ready", name))
             except Exception as exc:
                 log.exception("model load failed")

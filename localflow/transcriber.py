@@ -21,6 +21,10 @@ def resolve_model(name):
 
 def is_local(name):
     """True if the model is on disk (bundled, or downloaded earlier into the HF cache layout)."""
+    from . import sherpa_engine
+
+    if sherpa_engine.supports(name):
+        return sherpa_engine.is_local(name)
     if resolve_model(name)[1] is None:
         return True
     try:
@@ -62,6 +66,7 @@ class Transcriber:
     def __init__(self):
         self.model = None
         self.mlx = None  # apple_gpu.MLXModel when running on the Apple Silicon GPU
+        self.sherpa = None  # sherpa_engine.SherpaModel for Parakeet (CPU)
         self._tokenizer = None  # for is_uncommon() when the model isn't a CTranslate2 one
         self.model_name = None
         self._lock = threading.Lock()
@@ -69,17 +74,32 @@ class Transcriber:
         self.device = "cpu"
         self.device_error = ""
 
-    def load(self, name, device="auto"):
+    def load(self, name, device="auto", progress=None):
         """device: "auto" (a GPU when its support is installed, else CPU), "cuda", "apple", "cpu"."""
         from . import apple_gpu
 
         t0 = time.time()
+        # CTranslate2 runs best with one thread per physical core (hyper-threads add nothing).
+        threads = max(1, min(8, (os.cpu_count() or 4) // 2))
+        from . import sherpa_engine
+
+        if sherpa_engine.supports(name):
+            sherpa = sherpa_engine.SherpaModel(name, threads, progress)
+            warm = (np.random.default_rng(0).standard_normal(16000) * 0.01).astype(np.float32)
+            sherpa.transcribe(warm)
+            with self._lock:
+                self.model, self.mlx, self.sherpa, self.model_name = None, None, sherpa, name
+                self._tokenizer = self._load_tokenizer()
+            self.device, self.device_error = "cpu", ""
+            self.ready.set()
+            log.info("model %s ready on the CPU (sherpa-onnx) in %.1fs", name, time.time() - t0)
+            return time.time() - t0
         use_apple = (device == "apple" or (device == "auto" and apple_gpu.available())) and apple_gpu.supports(name)
         if use_apple:
             try:
                 mlx = apple_gpu.MLXModel(name)
                 with self._lock:
-                    self.model, self.mlx, self.model_name = None, mlx, name
+                    self.model, self.mlx, self.sherpa, self.model_name = None, mlx, None, name
                     self._tokenizer = self._load_tokenizer()
                 self.device, self.device_error = "apple", ""
                 self.ready.set()
@@ -93,8 +113,6 @@ class Transcriber:
 
         from . import gpu
 
-        # CTranslate2 runs best with one thread per physical core (hyper-threads add nothing).
-        threads = max(1, min(8, (os.cpu_count() or 4) // 2))
         use_cuda = device == "cuda" or (device == "auto" and gpu.available())
         model = None
         if use_cuda:
@@ -117,7 +135,7 @@ class Transcriber:
             self.device = "cpu"
         log.info("loading model %s from %s on %s", name, target, self.device)
         with self._lock:
-            self.model, self.mlx, self.model_name = model, None, name
+            self.model, self.mlx, self.sherpa, self.model_name = model, None, None, name
         self.ready.set()
         log.info("model %s ready in %.1fs", name, time.time() - t0)
         return time.time() - t0
@@ -155,7 +173,7 @@ class Transcriber:
         dictation), so a chunk continues the sentence instead of starting fresh."""
         with self._lock:
             model = self.model
-            if model is None and self.mlx is None:
+            if model is None and self.mlx is None and self.sherpa is None:
                 raise RuntimeError("model not loaded")
             parts = []
             if vocabulary:
@@ -173,6 +191,8 @@ class Transcriber:
                 # window, silently dropping speech from dictations over ~20 s.
                 without_timestamps=False,
             )
+            if self.sherpa is not None:
+                return self._sherpa_text(audio)
             if self.mlx is not None:
                 return self._mlx_text(audio, kwargs["language"], prompt)
             # Voice-activity filtering stops Whisper inventing text over silence; keep it
@@ -194,8 +214,10 @@ class Transcriber:
         """Word-level hypothesis for live typing: [(start_s, end_s, text_with_leading_space, probability)]."""
         with self._lock:
             model = self.model
-            if model is None and self.mlx is None:
+            if model is None and self.mlx is None and self.sherpa is None:
                 raise RuntimeError("model not loaded")
+            if self.sherpa is not None:
+                return self.sherpa.words(audio)
             if self.mlx is not None:
                 return self._mlx_words(audio, None if language in (None, "", "auto") else language, prompt)
             segments, _info = model.transcribe(
@@ -225,17 +247,27 @@ class Transcriber:
                     words.append((float(w.start), float(w.end), w.word, float(w.probability)))
             return words
 
-    # ------------------------------------------------------------------ Apple GPU (MLX)
-    def _mlx_text(self, audio, language, prompt):
-        """Like the CTranslate2 path: transcribe only the speech (VAD), so Whisper can't invent
-        text over silence; if VAD finds nothing in an audible clip, try the whole clip."""
+    @staticmethod
+    def _speech_only(audio):
+        """Just the speech (VAD), so the model can't invent text over silence; the whole clip
+        if VAD finds nothing in an audible one; None for silence."""
         regions = speech_regions(audio)
         if regions:
             pad = int(0.2 * 16000)
-            clip = np.concatenate([audio[max(0, int(s * 16000) - pad):int(e * 16000) + pad] for s, e in regions])
-        elif len(audio) > 16000 * 0.6 and float(abs(audio).max()) > 0.02:
-            clip = audio
-        else:
+            return np.concatenate([audio[max(0, int(s * 16000) - pad):int(e * 16000) + pad] for s, e in regions])
+        if len(audio) > 16000 * 0.6 and float(abs(audio).max()) > 0.02:
+            return audio
+        return None
+
+    def _sherpa_text(self, audio):
+        clip = self._speech_only(audio)
+        return "" if clip is None else self.sherpa.transcribe(clip)
+
+    # ------------------------------------------------------------------ Apple GPU (MLX)
+    def _mlx_text(self, audio, language, prompt):
+        """Like the CTranslate2 path: transcribe only the speech."""
+        clip = self._speech_only(audio)
+        if clip is None:
             return ""
         result = self.mlx.transcribe(clip, language, prompt)
         return " ".join(s["text"].strip() for s in result.get("segments", [])
