@@ -97,11 +97,14 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 - **Dictation:** hotkey (type a combo like `ctrl+cmd`, `alt_r`, `ctrl+shift+space`, or click *Record…* and press it; `cmd` is the Windows key on Windows), mode (`hold` push-to-talk or `toggle`), the paste-last hotkey, and **Keep listening after release** (0-3 s, default 0.3): how long the mic stays open after you let go of the hotkey, so a trailing word isn't cut off. The pill keeps showing the live waveform until it closes.
 - **Microphone:** input device; **Keep the microphone ready** (on by default) keeps the input open and buffers the last half second, so your first word isn't cut off while the device wakes up (Bluetooth headsets can take a second). The OS microphone indicator stays on while LocalFlow runs; turn this off if you'd rather the mic only opens while you dictate. **Keep before press** (0-2 s, default 0.5) sets how much of that buffer is kept. **Test microphone** records 4 seconds and shows the level and what was heard.
 - **Transcription engine:**
-  - *On this computer*: Whisper runs locally. `base.en` is bundled; bigger models download once into `data/models`.
+  - *On this computer*: Whisper or NVIDIA's Parakeet runs locally. `base.en` is bundled; other models download once into `data/models`. Without an NVIDIA GPU, **Parakeet is the best choice**: in our benchmark ([docs/MODELS.md](docs/MODELS.md)) `parakeet-v2` was as accurate as `large-v3-turbo` and about 9x faster on a CPU.
 
     | Model | Download | Notes |
     |---|---|---|
-    | `base.en` | 145 MB | bundled default, fastest |
+    | `parakeet-v2` | 660 MB | English; best accuracy on a CPU, about 1 s per 15 s of speech |
+    | `parakeet-small` | 110 MB | English; more accurate than `small.en` and fastest of all |
+    | `parakeet-v3` | 670 MB | 25 European languages, detected automatically |
+    | `base.en` | 145 MB | bundled default |
     | `small.en` | 480 MB | more accurate, about 2x slower |
     | `distil-large-v3` | 1.5 GB | English, near large-model accuracy |
     | `large-v3-turbo` | 1.6 GB | best local accuracy, multilingual, needs Apple Silicon or a fast CPU |
@@ -118,7 +121,7 @@ LocalFlow learns how you talk, on your computer only (`data/learned.json`), from
 - **API keys:** stored in the Windows Credential Manager / macOS Keychain, not in the data folder.
 - **Apps:** *Type into* **All apps** (default), **Only the apps listed**, or **All apps except those listed**, for both pasting and live typing. List programs one per line (`chrome`, `slack`, `code`, `notepad`; on a Mac the app name like `Google Chrome` or its bundle id). *Apps you've dictated into* offers the ones you've actually used so you don't have to guess names. When the focused app isn't allowed, the text is copied to the clipboard and saved in Transcripts instead, and the pill says so.
 - **Output:** paste into the focused app, restore the previous clipboard, remove filler words, trailing space, sounds, keep the last recording for troubleshooting.
-- **Words:** vocabulary (names and jargon to spell your way; this is the single biggest accuracy win for names) and replacements (`spoken => written`, e.g. `new line => \n`).
+- **Words:** vocabulary (names and jargon to spell your way; this is the single biggest accuracy win for names with Whisper models, which read the list; Parakeet doesn't, but in our tests `parakeet-v2` without a list spelled uncommon words better than `base.en` or `large-v3-turbo` with one, and nearly as well as `small.en` with one) and replacements (`spoken => written`, e.g. `new line => \n`), which work with every model.
 
 ### Updates
 
@@ -139,13 +142,14 @@ Measured on a Ryzen 7 5800X3D with a GTX 1060 (time to finish after you let go o
 | large-v3-turbo on an NVIDIA GPU | ~1.0 s | ~2.4 s (→ ~1.1 s while talking) |
 
 - **Use your NVIDIA GPU (Windows).** *Settings → Transcription → Download GPU support* fetches just the three NVIDIA libraries Whisper needs (about 650 MB, from NVIDIA's official packages on PyPI) into the data folder; after that the GPU is used automatically (*Processor: Auto*). 3-5x faster.
-- **With a GPU, pick `large-v3-turbo`:** the most accurate model and still about 1 s for a short dictation. On a CPU it's slower than `medium.en`; there `small.en` (fast) or `medium.en` (accurate) are the choices.
+- **On a CPU, pick `parakeet-v2`** (or `parakeet-small` on a slow machine): about 1 s for 15 seconds of speech on a 6-core CPU, and as accurate as `large-v3-turbo`.
+- **With an NVIDIA GPU, `large-v3-turbo` is also fast:** about 1 s for a short dictation, and the one to pick for languages Parakeet doesn't cover.
 - **Every dictation is transcribed in pieces of at most 20 seconds,** however long you talk: cut at your pauses, or at the quietest moment if you don't pause, with each piece given the text before it as context. This keeps long dictations as reliable as short ones: Whisper works in 30-second windows and can lose its place inside a long one (in testing, a single 48-second pass with that fault lost 84 of 134 words; the same audio in pieces lost none).
 - **Transcribe while I talk** (on by default): those pieces are transcribed in the background as you go, so after a long dictation only the last piece is left. Dictations up to 20 seconds are one normal pass.
 - **Search: Fast** (default) tries one reading instead of five; it was as accurate in our tests and 10-20% quicker.
 - *Speed test* times your current setup on an 11-second sample.
 
-Every local pass costs about the same whether it's 2 or 25 seconds of audio (Whisper always processes a 30-second window), which is why short dictations only get faster with a GPU or a smaller model.
+Every Whisper pass costs about the same whether it's 2 or 25 seconds of audio (Whisper always processes a 30-second window), which is why short dictations only get faster with a GPU or a smaller model. Parakeet's time grows with the length of the audio instead, so short dictations are quick on a CPU too.
 
 ### Why subscriptions only cover clean-up, not transcription
 
@@ -186,7 +190,7 @@ Same core loop: hold-to-talk, hands-free lock, floating waveform pill, paste int
 
 - **Hotkey stopped responding:** LocalFlow now repairs this by itself: every couple of seconds it checks that the keys it thinks are held really are (a key released on the lock screen, at Ctrl+Alt+Del or in an admin prompt is never seen and used to block the hotkey), and it reconnects if the system stops sending it keys. If it still happens, *Quick settings → Restart hotkeys & microphone* (or *Restart LocalFlow*), also in the tray menu.
 
-- **Words missing or wrong:** run *Settings → Test microphone*. A low peak means the wrong input or a muted mic. Keep *Keep the microphone ready* on so the first word isn't clipped. Add names to *Vocabulary*. For the best accuracy switch the engine to Groq, or the local model to `small.en` / `large-v3-turbo`. `data/localflow.log` records each dictation's length, level, engine and timing, and `data/last-recording.wav` is exactly what was transcribed.
+- **Words missing or wrong:** run *Settings → Test microphone*. A low peak means the wrong input or a muted mic. Keep *Keep the microphone ready* on so the first word isn't clipped. Add names to *Vocabulary*. For the best accuracy switch the engine to Groq, or the local model to `parakeet-v2` (or `large-v3-turbo` with a GPU). `data/localflow.log` records each dictation's length, level, engine and timing, and `data/last-recording.wav` is exactly what was transcribed.
 - **Claude/ChatGPT clean-up fails:** press *Test clean-up*; it lists every install it tried and why each failed (for example "Not logged in"). Sign in with `claude` or `codex login`, or put a working command in *Claude command* / *Codex command*.
 
 - **Nothing happens on the hotkey (Mac):** Accessibility and Input Monitoring must both be on for LocalFlow, then restart it. After updating to a new build you may need to remove and re-add it in both lists.

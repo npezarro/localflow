@@ -36,6 +36,24 @@ LocalFlow runs two families of local models:
 | canary-180m-flash (not shipped) | 14.41 | 10.8 | 41.3 | 1.8 | 3.0 | 8.9 | 1.72 | 7.63 | 6 |
 | moonshine-base v2 (not shipped) | failed | | | | | | | | 190 |
 
+Shipped models again, run through LocalFlow's own transcription path (`Transcriber.transcribe`: speech-only trimming, the decoding settings the app uses), which is what you get:
+
+| Model | WER | AMI | Earnings-22 | Libri clean | Libri other | VoxPopuli | Median s/clip | Max s | Bad |
+|---|---|---|---|---|---|---|---|---|---|
+| parakeet-v2 | 5.78 | 7.2 | 11.5 | 1.1 | 2.0 | 7.5 | 0.96 | 1.97 | 0 |
+| parakeet-small | 7.17 | 9.8 | 11.7 | 2.0 | 4.5 | 8.9 | 0.36 | 0.57 | 0 |
+| parakeet-v3 | 7.42 | 7.2 | 15.1 | 2.2 | 3.5 | 8.1 | 0.98 | 1.66 | 1 |
+
+Short dictations (same machine, best of 3, through the app path):
+
+| Model | 3 s of speech | 6 s | 11 s |
+|---|---|---|---|
+| base.en | 0.61 s | 0.68 s | 0.70 s |
+| parakeet-v2 | 0.18 s | 0.35 s | 0.65 s |
+| parakeet-small | 0.08 s | 0.13 s | 0.23 s |
+
+Whisper pads every pass to a 30-second window, so its time barely changes with length; Parakeet's grows with the audio, which makes short dictations very quick.
+
 The bar for shipping a model was: lower WER than small.en, no slower than small.en, and no more bad outputs. All three shipped Parakeet models clear it. The one "bad" Parakeet clip is an earnings call where two people talk over each other; the model kept one speaker.
 
 Not shipped, and why:
@@ -51,7 +69,18 @@ Earnings-22 is the one set where large-v3-turbo beats Parakeet (9.9 vs 12.7): lo
 
 ## Vocabulary
 
-VOCAB_RESULTS
+Whisper models read the Vocabulary list as a prompt; Parakeet has no prompt. To see what that costs, 48 clips from Earnings-22, AMI and VoxPopuli were scored on their uncommon words (79 in all, picked the way LocalFlow picks them: words Whisper's tokenizer splits into several pieces), with and without a vocabulary list holding those words plus distractors from other clips.
+
+| Model | Uncommon words right, no list | With the list |
+|---|---|---|
+| base.en | 60.8% | 83.5% |
+| small.en | 74.7% | 91.1% |
+| large-v3-turbo | 81.0% | 84.8% |
+| parakeet-v2 | 88.6% | 89.9% (hotwords) |
+| parakeet-v3 | 73.4% | 78.5% (hotwords) |
+| parakeet-small | 74.7% | n/a |
+
+parakeet-v2 without a list beat base.en and large-v3-turbo with one, and came close to small.en with one. sherpa-onnx can bias Parakeet toward listed words ("hotwords"), but only with its beam search, which has an open bug returning empty or made-up text for some Parakeet clips (k2-fsa/sherpa-onnx#3267). It didn't trigger here (no empty outputs in 192 hotword runs), but the gain was small (one word for v2, four for v3), so LocalFlow uses the plain decoder and doesn't pass the list to Parakeet. Replacements and learned corrections work with every model. If you depend on the list for names, base.en or small.en with the list may still spell them better than parakeet-small or parakeet-v3.
 
 ## Reproduce
 

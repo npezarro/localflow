@@ -83,6 +83,7 @@ def localflow(name):
 ENGINES = {
     "app-parakeet-v2": lambda: localflow("parakeet-v2"),
     "app-parakeet-v3": lambda: localflow("parakeet-v3"),
+    "app-parakeet-small": lambda: localflow("parakeet-small"),
     "whisper-base.en": lambda: whisper("base.en"),
     "whisper-small.en": lambda: whisper("small.en"),
     "whisper-large-v3-turbo": lambda: whisper("large-v3-turbo"),
