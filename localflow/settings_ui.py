@@ -309,9 +309,11 @@ class SettingsPanel:
         s = self._section("Transcription")
         self._row(s, "Engine", self._combo(s, "engine", [lbl for _k, lbl in ENGINES], 52))
         self._row(s, "Local model", self._combo(s, "model", config.MODEL_CHOICES, 20, readonly=False),
-                  "base.en is bundled; others download once. On a CPU: small.en is fast, medium.en more "
-                  "accurate but slow. With an NVIDIA GPU: large-v3-turbo is the most accurate and "
-                  "still fast (about 1 s for a short dictation).")
+                  "base.en is bundled; others download once. On a CPU, NVIDIA's Parakeet models are the "
+                  "best choice: parakeet-v2 (English, 660 MB) was as accurate as large-v3-turbo in our "
+                  "tests and about 9x faster on a CPU; parakeet-small (110 MB) is quicker still and beats "
+                  "small.en; parakeet-v3 covers 25 European languages. Parakeet ignores the Vocabulary "
+                  "list (replacements still apply). With an NVIDIA GPU: large-v3-turbo is also fast.")
         self._row(s, "Processor", self._combo(s, "device", [lbl for _k, lbl in DEVICES], 34),
                   "Auto uses a GPU once its support is downloaded (about 3-5x faster), otherwise the "
                   "CPU. Choosing the GPU itself makes LocalFlow tell you whenever it can't use it.")
@@ -469,7 +471,8 @@ class SettingsPanel:
 
         s = self._section("Words")
         self.vocab_text = self._text(s, 3)
-        self._row(s, "Vocabulary", self.vocab_text, "One per line: names and jargon to spell your way.")
+        self._row(s, "Vocabulary", self.vocab_text, "One per line: names and jargon to spell your way (Whisper models; "
+                                                 "for Parakeet, use Replacements).")
         self.repl_text = self._text(s, 3)
         self._row(s, "Replacements", self.repl_text,
                   "One per line, spoken => written. e.g. new line => \\n")
