@@ -8,6 +8,7 @@ components, each under its own license:
 | Whisper `base.en` model (OpenAI), converted by Systran | speech recognition | MIT |
 | faster-whisper, CTranslate2 | running the model | MIT |
 | Silero VAD (via faster-whisper), ONNX Runtime | detecting speech / pauses | MIT |
+| sherpa-onnx (k2-fsa) | running the Parakeet models | Apache-2.0 |
 | PyAV / FFmpeg libraries | audio decoding (faster-whisper dependency) | LGPL / BSD |
 | NumPy | audio processing | BSD |
 | sounddevice / PortAudio | microphone access | MIT |
@@ -24,3 +25,6 @@ address, a US government work in the public domain.
 
 The LGPL components are included unmodified as separate Python packages inside the app
 folder and can be replaced by the user.
+
+Models downloaded on request (not bundled): NVIDIA Parakeet TDT 0.6B v2 / v3 and Parakeet TDT 110M
+(CC-BY-4.0, NVIDIA; ONNX exports by the sherpa-onnx project), and other Whisper sizes (MIT).

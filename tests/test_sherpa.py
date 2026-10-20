@@ -1,5 +1,6 @@
 import hashlib
 import io
+import os
 import types
 
 import numpy as np
@@ -72,3 +73,23 @@ def test_damaged_download_is_not_used(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="damaged"):
         sherpa_engine.model_path("fake")
     assert not sherpa_engine.is_local("fake")
+
+
+def test_archive_download_extracts_model_files(monkeypatch, tmp_path):
+    import tarfile as tf
+
+    buf = io.BytesIO()
+    with tf.open(fileobj=buf, mode="w:bz2") as tar:
+        for name, data in (("pkg/encoder.int8.onnx", b"enc"), ("pkg/tokens.txt", b"tok"), ("pkg/test_wavs/0.wav", b"w")):
+            info = tf.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    payload = buf.getvalue()
+    monkeypatch.setattr(sherpa_engine.paths, "_data_dir", str(tmp_path))
+    monkeypatch.setitem(sherpa_engine.MODELS, "arch", {
+        "archive": ("https://example/x.tar.bz2", len(payload), hashlib.sha256(payload).hexdigest()),
+        "files": {"encoder.int8.onnx": (0, None), "tokens.txt": (0, None)}})
+    monkeypatch.setattr(sherpa_engine.urllib.request, "urlopen", lambda url, timeout: io.BytesIO(payload))
+    path = sherpa_engine.model_path("arch")
+    assert sorted(os.listdir(path)) == sorted([".localflow-complete", "encoder.int8.onnx", "tokens.txt"])
+    assert open(os.path.join(path, "tokens.txt"), "rb").read() == b"tok"
